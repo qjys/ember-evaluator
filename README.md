@@ -158,7 +158,7 @@ Enable it for a run; the plugin starts the Collector on demand:
 ember-evaluator run playbook/gsm8k/gsm8k-quick-start.yaml --tracer
 ```
 
-The plugin ships inside the runtime: `pnpm build` compiles `plugins/tracer` into `dist/plugins/tracer`, so no separate install or interpreter is required. The Collector runs as a Node child process using the bundled `node:sqlite`.
+The plugin ships inside the runtime: `pnpm build` compiles `plugins/tracer` into `dist/external-plugins/tracer`, so no separate install or interpreter is required. The Collector runs as a Node child process using the bundled `node:sqlite`.
 
 Manage the Collector with four subcommands:
 

@@ -2,7 +2,9 @@ import { Command as Commander, CommanderError, Option } from "commander";
 import { resolve } from "node:path";
 import type { Command } from "./cli.js";
 import type { CliOverrides } from "./config/schema.js";
-import { pluginCommands } from "./plugins-commands.js";
+import { pluginCommandArguments } from "./plugin-cli.js";
+import type { CliExtensions } from "./plugin-cli.js";
+import type { PluginActivation } from "./core/contracts/plugin-extension.js";
 
 interface Options extends Omit<CliOverrides, "plugins"> {
   patch?: string; taskIdsFile?: string; resume?: boolean | string; dryRun?: boolean;
@@ -10,22 +12,16 @@ interface Options extends Omit<CliOverrides, "plugins"> {
   run?: string; taskId?: string[]; requestId?: string; reason?: string;
   problem?: string; kernel?: string; out?: string; round?: string; device?: string;
   python?: string; seeds?: string; seed?: string; warmup?: string; network?: string;
-  tracer?: boolean | string;
 }
-
-/** The only place the host maps a convenience flag to a bundled plugin id. */
-const TRACER_PLUGIN_ID = "tracer";
 
 export class CommandUsageError extends TypeError {
   constructor(message: string, readonly helpText: string) { super(message); }
 }
 
-export function parseCommand(argv: string[]): Command {
-  const plugins = pluginCommands();
-  // Plugins that declared ember-plugin.json own their subcommands; pass every argument through.
-  const matched = plugins.find(command => command.name === argv[0]);
-  if (matched !== undefined) return { kind: "plugin", plugin: matched, argv: argv.slice(1) };
+export function parseCommand(argv: string[], extensions: CliExtensions = { commands: [], options: [] }): Command {
+  const plugins = extensions.commands;
   const pluginExamples = plugins.map(command => `  ember-evaluator ${command.name} <command> ...`).join("\n");
+  const activations = new Map<string, PluginActivation>();
   let result: Command | undefined;
   let help = "";
   const program = new Commander("ember-evaluator")
@@ -47,10 +43,7 @@ export function parseCommand(argv: string[]): Command {
       const value = opts[key];
       if (value !== undefined) overrides[key] = value;
     }
-    if (opts.tracer !== undefined) overrides.plugins = [{
-      id: TRACER_PLUGIN_ID,
-      ...(typeof opts.tracer === "string" ? { config: { url: opts.tracer } } : {}),
-    }];
+    if (activations.size) overrides.plugins = [...activations.values()];
     return { overrides, ...networkOptions(opts), ...(opts.patch === undefined ? {} : { patchPath: resolve(opts.patch) }) };
   };
   for (const name of ["run", "warmup", "doctor", "inspect"] as const) {
@@ -61,8 +54,7 @@ export function parseCommand(argv: string[]): Command {
       progress(cmd).option("--task-ids-file <json>", "Select tasks from a JSON object containing a taskIds array; overrides sampling");
     }
     if (name === "run") cmd.option("--dry-run", "Resolve the dataset and list selected task IDs without solving tasks")
-      .addOption(new Option("--resume [run-id]", "Resume a saved run; omit the ID to select automatically").conflicts("dryRun"))
-      .addOption(new Option("--tracer [url]", "Mirror the run into the tracer plugin; the optional URL overrides the Collector endpoint"));
+      .addOption(new Option("--resume [run-id]", "Resume a saved run; omit the ID to select automatically").conflicts("dryRun"));
     cmd.addHelpText("after", `\nExample:\n  ember-evaluator ${name} experiment.yaml`);
     cmd.action((file: string, opts: Options) => {
       result = { kind: name === "run" && opts.dryRun ? "dry-run" : name, file, ...common(opts),
@@ -122,15 +114,30 @@ export function parseCommand(argv: string[]): Command {
         : { kind: "kernel-bench", ...base };
     });
   }
-  // Plugin commands are dispatched before Commander sees argv; register placeholders so --help lists
-  // the installed plugins without duplicating their subcommands here.
-  const builtinNames = new Set(program.commands.map(command => command.name()));
+  const names = new Set(program.commands.map(command => command.name()));
+  names.add("help");
   for (const plugin of plugins) {
-    if (builtinNames.has(plugin.name)) continue;
-    program.command(plugin.name)
-      .description(plugin.commandDescription || plugin.description)
-      .addHelpText("after", `\nRun ember-evaluator ${plugin.name} --help for its own commands.`);
+    if (!/^[a-z][a-z0-9-]*$/u.test(plugin.name) || names.has(plugin.name)) throw new TypeError(`Duplicate or reserved CLI command: ${plugin.name}`);
+    names.add(plugin.name);
+    program.command(plugin.name).description(plugin.description);
   }
+  for (const { id, command, option: contribution } of extensions.options) {
+    const target = program.commands.find(item => item.name() === command);
+    if (!target || command !== "run") throw new TypeError(`Unsupported CLI extension target: ${command}`);
+    const option = new Option(contribution.flags, contribution.description);
+    if (!option.long || option.long === "--help" || option.short === "-h" || target.options.some(existing =>
+      (option.long && [existing.long, existing.short].includes(option.long)) ||
+      (option.short && [existing.long, existing.short].includes(option.short)) || existing.attributeName() === option.attributeName()))
+      throw new TypeError(`Duplicate or reserved CLI option: ${contribution.flags}`);
+    target.addOption(option);
+    target.on(`option:${option.name()}`, value => contribution.configure(value, {
+      enable(config) {
+        activations.set(id, { id, config: { ...activations.get(id)?.config, ...config } });
+      },
+    }));
+  }
+  const matched = plugins.find(command => command.name === argv[0]);
+  if (matched) return { kind: "plugin", plugin: matched, argv: pluginCommandArguments(argv.slice(1)) };
   // Preserve rejection of duplicate scalar options, which Commander otherwise overwrites.
   const configure = (cmd: Commander) => {
     cmd.exitOverride().allowExcessArguments(false).showHelpAfterError();

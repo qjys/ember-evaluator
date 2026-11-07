@@ -21,6 +21,7 @@ async function filesAt(path, files) {
   if (stat.isDirectory()) {
     for (const name of (await readdir(path)).sort()) {
       // Python imports can create bytecode during tests without changing build inputs.
+      if (["dist", "node_modules", ".cache", ".scratch", "coverage"].includes(name)) continue;
       if (name === "__pycache__" || /\.py[co]$/u.test(name)) continue;
       await filesAt(join(path, name), files);
     }
@@ -34,6 +35,15 @@ async function filesAt(path, files) {
 export async function sourceFingerprint(workspace = root) {
   const files = [];
   for (const input of buildInputs) await filesAt(join(workspace, input), files);
+  let plugins = [];
+  try { plugins = await readdir(join(workspace, "plugins"), { withFileTypes: true }); }
+  catch (error) { if (error.code !== "ENOENT") throw error; }
+  for (const plugin of plugins) {
+    if (!plugin.isDirectory()) continue;
+    try { await lstat(join(workspace, "plugins", plugin.name, "ember-plugin.json")); }
+    catch (error) { if (error.code === "ENOENT") continue; throw error; }
+    await filesAt(join(workspace, "plugins", plugin.name), files);
+  }
   files.sort((a, b) => a.localeCompare(b, "en"));
   const digest = createHash("sha256");
   for (const path of files) {

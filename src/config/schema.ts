@@ -6,8 +6,8 @@ export type CliOverrides = {
   endpoint?: string;
   apiKey?: string;
   apiKeyEnv?: string;
-  /** Bundled plugins to load for this run; config is handed to the plugin factory. */
-  plugins?: { id: string; config?: Record<string, unknown> }[];
+  /** Explicit runtime extensions; credentials must use environment references. */
+  plugins?: import("../core/contracts/plugin-extension.js").PluginActivation[];
 };
 
 export type ModelConfig = {

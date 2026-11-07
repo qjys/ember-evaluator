@@ -1,3 +1,4 @@
+import type { StoreDecoratorFactory } from "./contracts/plugin-extension.js";
 import type { HardwareKind } from "./contracts/hardware.js";
 import type { PhaseTimeoutOverrides } from "./contracts/task.js";
 import { Service, type Context } from "@deepseek-ai/cordis";
@@ -14,10 +15,7 @@ import type { Verifier } from "./contracts/verifier.js";
 import { parseConfigProfile, type ConfigProfile } from "../config/profiles.js";
 import type { PluginConfigTransport } from "./contracts/config-transport.js";
 
-export type PluginRole = "benchmark" | "environment" | "solver" | "verifier" | "metrics" | "reporter" | "store" | "store-decorator" | "scheduler";
-
-/** Wraps the configured store without replacing it, e.g. to mirror evidence elsewhere. */
-export type StoreDecorator = (inner: RunStore) => RunStore;
+export type PluginRole = "benchmark" | "environment" | "solver" | "verifier" | "metrics" | "reporter" | "store" | "scheduler";
 
 export type RoleImplementations = {
   benchmark: Benchmark;
@@ -27,7 +25,6 @@ export type RoleImplementations = {
   metrics: Metrics;
   reporter: Reporter;
   store: RunStore;
-  "store-decorator": StoreDecorator;
   scheduler: TaskScheduler;
 };
 
@@ -41,6 +38,7 @@ export type ReportingFactoryContext = {
 export type FactoryContext<R extends PluginRole> = R extends "metrics" | "reporter" ? ReportingFactoryContext : PluginFactoryContext;
 
 export type PluginFactoryContext = {
+  signal?: AbortSignal;
   benchmarkName?: string;
   network?: import("./contracts/network.js").NetworkAccess;
   /** Bootstrap always supplies this; omitted by historical SDK callers means NPU. */
@@ -97,10 +95,30 @@ declare module "@deepseek-ai/cordis" {
 
 export class EvaluatorRegistry extends Service {
   protected readonly registrations = new Map<string, Registration>();
+  private readonly storeDecorators = new Map<string, { validate: PluginConfigValidator<unknown>; factory: StoreDecoratorFactory<unknown> }>();
   private readonly profileRegistrations = new Map<string, ConfigProfile>();
 
   constructor(ctx: Context) {
     super(ctx, "evaluator");
+  }
+
+  registerStoreDecorator<T>(name: string, validate: PluginConfigValidator<T>, factory: StoreDecoratorFactory<T>): () => Promise<void> {
+    if (!name.trim()) throw new TypeError("Store decorator name must not be empty");
+    return this.ctx.effect(() => {
+      if (this.storeDecorators.has(name)) throw new TypeError(`Duplicate store decorator: ${name}`);
+      const entry = { validate, factory: factory as StoreDecoratorFactory<unknown> };
+      this.storeDecorators.set(name, entry);
+      return () => { if (this.storeDecorators.get(name) === entry) this.storeDecorators.delete(name); };
+    }, `evaluator.registerStoreDecorator(${JSON.stringify(name)})`);
+  }
+
+  storeDecoratorNames(): string[] { return [...this.storeDecorators.keys()]; }
+
+  prepareStoreDecorator(name: string, config: unknown) {
+    const entry = this.storeDecorators.get(name);
+    if (!entry) throw new TypeError(`Unknown store decorator: ${name}`);
+    const validated = entry.validate(config);
+    return (runtime: PluginFactoryContext) => entry.factory(validated, runtime);
   }
 
   registerProfile(value: ConfigProfile): () => Promise<void> {

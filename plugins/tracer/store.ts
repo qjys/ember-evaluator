@@ -30,11 +30,31 @@ export class TracerStore implements RunStore {
     private readonly inner: RunStore,
     private readonly client: TracerClient,
     private readonly warn: (message: string, level?: "info" | "warning") => void,
-  ) {}
-
-  get controlDirectory(): string {
-    return this.inner.controlDirectory ?? "";
+  ) {
+    if ("controlDirectory" in inner) Object.defineProperty(this, "controlDirectory", { get: () => inner.controlDirectory });
+    if (inner.currentTaskResult) this.currentTaskResult = inner.currentTaskResult.bind(inner);
+    if (inner.updateRemoteAttempt) this.updateRemoteAttempt = inner.updateRemoteAttempt.bind(inner);
+    const importAttempt = inner.importAttempt?.bind(inner);
+    if (importAttempt) this.importAttempt = async (record, files, sourceRoot) => {
+      const accepted = await importAttempt(record, files, sourceRoot);
+      if (!accepted) return false;
+      const key = keyOf(record.key);
+      const tailer = this.tails.get(key);
+      this.tails.delete(key);
+      if (tailer) await tailer.stop();
+      const paths = this.allocations.get(key) ?? { root: sourceRoot, agent: join(sourceRoot, "agent"), verifier: join(sourceRoot, "verifier"), artifacts: join(sourceRoot, "artifacts") };
+      if (!tailer) await this.publishTrajectory(record, paths);
+      await this.publishSummary(record, paths);
+      await this.client.ingest(record.key.attemptId, [JSON.stringify(record)]);
+      this.allocations.delete(key);
+      return true;
+    };
   }
+
+  declare readonly controlDirectory?: string;
+  currentTaskResult?: (taskId: string) => Promise<AttemptRecord | null>;
+  importAttempt?: (record: AttemptRecord, files: FileManifest, sourceRoot: string) => Promise<boolean>;
+  updateRemoteAttempt?: (update: RemoteAttemptUpdate) => Promise<void>;
 
   async create(root: string, manifest: RunManifest, safeConfig: JsonValue): Promise<void> {
     await this.inner.create(root, manifest, safeConfig);
@@ -60,10 +80,6 @@ export class TracerStore implements RunStore {
 
   listAttempts(): Promise<AttemptSummary[]> {
     return this.inner.listAttempts();
-  }
-
-  currentTaskResult(taskId: string): Promise<AttemptRecord | null> {
-    return this.inner.currentTaskResult ? this.inner.currentTaskResult(taskId) : Promise.resolve(null);
   }
 
   async updateRun(patch: Partial<Pick<RunManifest, "status" | "finishedAt" | "durationMs" | "preparationRounds" | "source" | "taskIds" | "failure" | "initializationFailures">>): Promise<void> {
@@ -111,22 +127,15 @@ export class TracerStore implements RunStore {
   }
 
   async commit(record: AttemptRecord, files: FileManifest): Promise<void> {
+    await this.inner.commit(record, files);
     const key = keyOf(record.key);
     const tailer = this.tails.get(key);
     this.tails.delete(key);
     if (tailer) await tailer.stop();
-    await this.inner.commit(record, files);
     if (!tailer) await this.publishTrajectory(record, this.allocations.get(key));
     await this.publishSummary(record, this.allocations.get(key));
     await this.client.ingest(record.key.attemptId, [JSON.stringify(record)]);
-  }
-
-  importAttempt(record: AttemptRecord, files: FileManifest, sourceRoot: string): Promise<boolean> {
-    return this.inner.importAttempt ? this.inner.importAttempt(record, files, sourceRoot) : Promise.resolve(false);
-  }
-
-  updateRemoteAttempt(update: RemoteAttemptUpdate): Promise<void> {
-    return this.inner.updateRemoteAttempt ? this.inner.updateRemoteAttempt(update) : Promise.resolve();
+    this.allocations.delete(key);
   }
 
   snapshot(): Promise<ResultSnapshot> {
@@ -138,8 +147,12 @@ export class TracerStore implements RunStore {
   }
 
   async close(): Promise<void> {
+    try { await this.dispose(); } finally { await this.inner.close(); }
+  }
+
+  async dispose(): Promise<void> {
     await this.stopTails();
-    return this.inner.close();
+    this.allocations.clear();
   }
 
   private tail(key: AttemptKey, paths: AttemptPaths): void {

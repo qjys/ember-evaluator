@@ -21,10 +21,10 @@ export type TracerConfig = {
 /** Compiled plugin root; the Collector builds next to this module. */
 const PLUGIN_ROOT = fileURLToPath(new URL(".", import.meta.url));
 /** Repository root, shared by the source and the dist layout. */
-const PACKAGE_ROOT = fileURLToPath(new URL("../../../", import.meta.url));
+const PACKAGE_ROOT = process.cwd();
 const COLLECTOR_ENTRY = resolve(PLUGIN_ROOT, "collector", "main.js");
 const DATA_ROOT = resolve(PACKAGE_ROOT, ".cache", "tracer");
-const KNOWN_FIELDS = ["url", "collector", "db", "spool", "token", "autostart", "timeoutMs"];
+const KNOWN_FIELDS = ["url", "collector", "db", "spool", "token", "tokenEnv", "autostart", "timeoutMs"];
 
 function expectRecord(value: unknown, path: string): Record<string, unknown> {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
@@ -37,6 +37,21 @@ function optionalString(value: unknown, path: string): string | undefined {
   if (value === undefined) return undefined;
   if (typeof value !== "string" || value.trim() === "") throw new TypeError(`${path} must be a non-empty string`);
   return value;
+}
+
+/** Options saved with a run must never contain a literal credential. */
+export function parseTracerOptions(value: unknown): Record<string, import("ember-evaluator").JsonValue> {
+  const record = expectRecord(value ?? {}, "tracer options");
+  const allowed = ["url", "collector", "db", "spool", "tokenEnv", "autostart", "timeoutMs"];
+  for (const key of Object.keys(record)) if (!allowed.includes(key)) throw new TypeError(`Unknown tracer option ${key}; use tokenEnv for credentials`);
+  if (record.tokenEnv !== undefined && (typeof record.tokenEnv !== "string" || !/^[A-Za-z_][A-Za-z0-9_]*$/u.test(record.tokenEnv))) throw new TypeError("Invalid tracer.tokenEnv");
+  if (typeof record.url === "string") {
+    const url = new URL(record.url);
+    if (url.username || url.password || url.search || url.hash || url.pathname !== "/") throw new TypeError("tracer.url must be a credential-free HTTP(S) origin");
+  }
+  const { tokenEnv, ...options } = record;
+  parseTracerConfig(options);
+  return { ...options, ...(tokenEnv === undefined ? {} : { tokenEnv }) } as Record<string, import("ember-evaluator").JsonValue>;
 }
 
 export function parseTracerConfig(value: unknown): TracerConfig {
@@ -59,7 +74,7 @@ export function parseTracerConfig(value: unknown): TracerConfig {
     ?? process.env.TRACER_COLLECTOR ?? COLLECTOR_ENTRY;
   const db = optionalString(record.db, "tracer.db") ?? process.env.TRACER_DB ?? join(DATA_ROOT, "trace.db");
   const spool = optionalString(record.spool, "tracer.spool") ?? process.env.TRACER_SPOOL ?? join(DATA_ROOT, "spool");
-  const token = optionalString(record.token, "tracer.token") ?? process.env.TRACER_TOKEN ?? "";
+  const token = optionalString(record.token, "tracer.token") ?? process.env[optionalString(record.tokenEnv, "tracer.tokenEnv") ?? "TRACER_TOKEN"] ?? "";
 
   if (record.autostart !== undefined && typeof record.autostart !== "boolean") {
     throw new TypeError("tracer.autostart must be a boolean");

@@ -158,7 +158,7 @@ ember-evaluator run playbook/terminalbench/terminalbench-4.0.yaml --network play
 ember-evaluator run playbook/gsm8k/gsm8k-quick-start.yaml --tracer
 ```
 
-插件随主运行时一起发布：`pnpm build` 会把 `plugins/tracer` 编译到 `dist/plugins/tracer`，无需单独安装，也不需要额外的解释器。Collector 以 Node 子进程运行，内置 `node:sqlite`。
+插件随主运行时一起发布：`pnpm build` 会把 `plugins/tracer` 编译到 `dist/external-plugins/tracer`，无需单独安装，也不需要额外的解释器。Collector 以 Node 子进程运行，内置 `node:sqlite`。
 
 用四个子命令管理 Collector：
 

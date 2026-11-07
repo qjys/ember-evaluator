@@ -163,8 +163,8 @@ export type RunManifest = {
     coordinatorPatchPath?: string;
     entries: { id: string; name: string }[];
     reportingProviders?: Record<string, string>;
-    /** Bundled plugin ids loaded from the command index; replayed when the run is retried. */
-    bundledPlugins?: string[];
+    /** Activated extensions and credential-free options, restored for resume/retry. */
+    plugins?: import("./plugin-extension.js").PluginActivation[];
   };
   startedAt: string;
   finishedAt: string | null;

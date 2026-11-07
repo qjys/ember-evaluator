@@ -1,3 +1,4 @@
+import { parsePluginActivations } from "./plugin-activation.js";
 import { expectRecord } from "./config/schema.js";
 import { openPluginRegistry } from "./plugin-runtime.js";
 import { fingerprintConfig, fingerprintResumeConfig } from "./core/run-manifest.js";
@@ -31,7 +32,7 @@ export async function retryRun(options: { networkConfigPath?: string; run: strin
   if (gateway) {
     await requireCredentialReferences(gateway.gatewayConfig);
     const config = await loadSavedConfig(gateway.gatewayConfig, process.env, { network: await loadNetworkConfig(options.networkConfigPath), configDirectory: gateway.configDirectory, ...(gateway.patchPath ? { patchPath: gateway.patchPath } : {}) });
-    const registry = await openPluginRegistry(gateway.patchPath);
+    const registry = await openPluginRegistry(gateway.patchPath, { plugins: gateway.plugins.map(plugin => plugin.id) });
     try {
       if (!config.deployment) throw new Error("Saved run has no Ray Jobs deployment");
       const { RayJobsDeployment } = await import("./adapters/ray/deployment.js");
@@ -49,10 +50,10 @@ export async function retryRun(options: { networkConfigPath?: string; run: strin
   const manifest = JSON.parse(await readFile(join(directory, "manifest.json"), "utf8")) as RunManifest;
   const configDirectory = manifest.pluginRuntime?.configDirectory ?? dirname(directory);
   const patchPath = manifest.pluginRuntime?.patchPath;
-  const bundledPlugins = manifest.pluginRuntime?.bundledPlugins ?? [];
+  const plugins = parsePluginActivations(manifest.pluginRuntime?.plugins);
   // Replay the bundled plugin set recorded by the original run so version checks match.
   const registry = await openPluginRegistry(patchPath,
-    bundledPlugins.length === 0 ? {} : { plugins: bundledPlugins });
+    { plugins: plugins.map(plugin => plugin.id) });
   try {
     // Rebind original service references before admitting work; no model overrides are accepted.
     const config = await loadSavedConfig(join(directory, "config.yaml"), process.env, {
@@ -65,7 +66,7 @@ export async function retryRun(options: { networkConfigPath?: string; run: strin
     log(`Request ${submitted.request.requestId}: ${submitted.request.status}; ${directory}`);
     if (submitted.active || submitted.request.status !== "pending") return 0;
     const components = await bootstrap(config, configDirectory, patchPath, log, registry, undefined,
-      { plugins: bundledPlugins });
+      { plugins, signal });
     try {
       // The engine owns the exclusive RunStore lock; a second CLI cannot write results.
       await components.store.open(directory);

@@ -4,6 +4,7 @@ const NEWLINE = 0x0a;
 
 /** Follows an append-only JSONL file and forwards complete lines as they appear. */
 export class TrajectoryTailer {
+  private polling = false;
   private offset = 0;
   private remainder = Buffer.alloc(0);
   private timer: NodeJS.Timeout | null = null;
@@ -18,7 +19,9 @@ export class TrajectoryTailer {
 
   start(): void {
     this.timer = setInterval(() => {
-      this.inflight = this.inflight.then(() => this.poll(false));
+      if (this.polling) return;
+      this.polling = true;
+      this.inflight = this.poll(false).finally(() => { this.polling = false; });
     }, this.intervalMs);
     this.timer.unref?.();
   }

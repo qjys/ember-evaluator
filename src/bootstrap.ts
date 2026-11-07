@@ -58,22 +58,9 @@ async function createBenchmark(
 }
 
 export type BootstrapOptions = {
-  /** Bundled plugin ids loaded for this run; ids that registered a store-decorator wrap the store. */
-  plugins?: string[];
-  /** Decorator config keyed by plugin id, such as a Collector endpoint. */
-  decoratorConfig?: Record<string, Record<string, unknown>>;
+  plugins?: import("./core/contracts/plugin-extension.js").PluginActivation[];
+  signal?: AbortSignal;
 };
-
-async function decorateStore(
-  registry: PluginRegistry,
-  inner: RunComponents["store"],
-  runtime: PluginFactoryContext,
-  id: string,
-  config: Record<string, unknown>,
-): Promise<RunComponents["store"]> {
-  const createDecorator = registry.ctx.evaluator.prepare("store-decorator", { name: id, config });
-  return (await createDecorator(runtime))(inner);
-}
 
 export async function bootstrap(
   config: LoadedConfig,
@@ -89,14 +76,17 @@ export async function bootstrap(
     { role: "reporter" as const, name: config.experiment.reporter.name },
   ];
   const registry = sharedRegistry ?? await openPluginRegistry(patchPath,
-    options.plugins === undefined ? {} : { plugins: options.plugins });
-  const { ctx, patch, pluginVersions, bundledPlugins } = registry;
+    options.plugins === undefined ? {} : { plugins: options.plugins.map(plugin => plugin.id) });
+  const { ctx, patch, pluginVersions } = registry;
   const reportingProviders = Object.fromEntries(reportingSelections.flatMap(selection => {
     const key = `${selection.role}:${selection.name}`;
     const provider = registry.reportingProviders[key];
     return provider === undefined ? [] : [[key, provider]];
   }));
   try {
+    const plugins = options.plugins ?? [];
+    await registry.loadPlugins(plugins.map(plugin => plugin.id));
+    const createDecorators = registry.prepareStoreDecorators(plugins);
     // Resolve names and validate every private config before any factory can
     // allocate a workspace, start a process, or perform model I/O.
     const createEnvironment = ctx.evaluator.prepare("environment", config.experiment.environment);
@@ -107,6 +97,7 @@ export async function bootstrap(
     const createScheduler = ctx.evaluator.prepare("scheduler", config.experiment.scheduler);
 
     const runtime = { ...createPluginRuntime(config, experimentDir, patch.patchPath ?? undefined, onWarning, (role, name) => ctx.evaluator.configTransport(role, name)),
+      ...(options.signal ? { signal: options.signal } : {}),
       ...(imageConfigFingerprint ? { imageConfigFingerprint } : {}) };
     registry.ctx.effect(() => () => runtime.network.dispose(), "Network client lifecycle");
     const benchmark = await createBenchmark(registry, config, runtime);
@@ -118,10 +109,7 @@ export async function bootstrap(
     const reporter = await createReporter(reportingRuntime);
     const store = await createStore(runtime);
     let decorated = store;
-    for (const id of bundledPlugins) {
-      if (!ctx.evaluator.has("store-decorator", id)) continue;
-      decorated = await decorateStore(registry, decorated, runtime, id, options.decoratorConfig?.[id] ?? {});
-    }
+    for (const createDecorator of createDecorators) decorated = await (await createDecorator(runtime))(decorated);
     const scheduler = await createScheduler(runtime);
     let disposed = false;
 
@@ -139,7 +127,7 @@ export async function bootstrap(
         ...(patch.patchPath === null ? {} : { patchPath: patch.patchPath }),
         entries: structuredClone(patch.entries),
         reportingProviders,
-        ...(bundledPlugins.length === 0 ? {} : { bundledPlugins: [...bundledPlugins] }),
+        ...(plugins.length === 0 ? {} : { plugins: structuredClone(plugins) }),
       },
       async dispose() {
         if (disposed) return;

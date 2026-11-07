@@ -103,58 +103,51 @@ Execution components receive the experiment's `npu` or `gpu` selection through `
 
 TypeScript plugins import HardwareKind/Metrics/Benchmark/Solver/PluginFactoryContext from `ember-evaluator` roots and implement contracts. Compile to JavaScript first; CLI does not load `.ts` entries.
 
-## In-Repository Plugins and `ember-plugin.json`
 
-A plugin under `plugins/<id>/` reaches the build artifacts and the CLI only when it ships `plugins/<id>/ember-plugin.json`. `pnpm build` scans `plugins/`, validates each manifest, compiles the plugin with its own tsconfig, copies the declared files into `dist/plugins/<id>/`, and writes `dist/plugins/commands.json`. Directories without a manifest are neither compiled nor copied and never appear in `--help`; they stay source-only.
+## Building and extending repository plugins
 
-Example: [`plugins/tracer/ember-plugin.json`](../../plugins/tracer/ember-plugin.json):
+`pnpm build` scans `plugins/*/ember-plugin.json`, compiles and copies files to `dist/external-plugins/<id>`, and writes the complete `dist/external-plugins/index.json` catalog. Plugins without CLI commands are included. Core evaluation components stay in src/plugins and their dist/plugins output is never overwritten.
 
 ```json
 {
-  "id": "tracer",
-  "description": "Trajectory collector: ingest traces, serve the dashboard, and analyze saved runs",
+  "schemaVersion": 1,
+  "id": "example",
   "entry": "./dist/index.js",
-  "bundled": true,
-  "command": { "name": "tracer", "cli": "./dist/cli.js", "description": "Manage the tracer Collector (serve, stop, status, logs, ...)" },
-  "build": { "tsconfig": "./tsconfig.json", "install": ["dist", "collector/view", "collector/schemas"] }
+  "cli": "./dist/cli-register.js",
+  "build": {
+    "tsconfig": "./tsconfig.json",
+    "install": ["dist", { "from": "assets", "to": "dist/assets" }]
+  }
 }
 ```
 
-| Field | Required | Meaning |
-| --- | --- | --- |
-| `id` | Yes | Must equal the directory name and decides the `dist/plugins/<id>/` location |
-| `description` | No | Plugin summary; used as the command description when `command.description` is absent |
-| `version` | No | Inherits the root `package.json` version when omitted, so it is maintained in one place |
-| `entry` | No | Plugin module entry pointing at compiled JS; recorded in the command index and used by the host to load `bundled` plugins (currently tracer) |
-| `bundled` | No | `true` marks a plugin shipped with the host; the host loader uses it to identify and verify the version |
-| `command.name` | With `command.cli` | CLI subcommand name such as `tracer` |
-| `command.cli` | With `command.name` | Subcommand entry pointing at compiled JS; a name without a CLI fails validation |
-| `command.description` | No | Command description shown by `--help` |
-| `build.tsconfig` | With `build` | The plugin's own tsconfig, usually emitting to `dist` |
-| `build.install` | With `build` | Paths installed into the runtime; `dist` contents are flattened into `dist/plugins/<id>/`, other paths keep their relative position |
+ID must match the directory name. Version defaults to the host version. entry is the Cordis entry; optional cli loads CLI registrations. Omit build.tsconfig for precompiled JavaScript; otherwise compilation targets the plugin's dist directory. Required build.install accepts relative paths or from/to resource copies. Manifest paths remain valid after installation; escaping paths and symlinks are rejected.
 
-Build output:
+The CLI module exports `registerCli(cli: PluginCliRegistrar)`, importing types from `ember-evaluator`:
 
-```text
-dist/plugins/
-├── commands.json          # Command index read by the runtime
-└── tracer/
-    ├── ember-plugin.json  # Copied verbatim for runtime provenance
-    ├── cli.js
-    ├── index.js
-    └── collector/...      # Static assets from build.install
+```ts
+export function registerCli(cli: PluginCliRegistrar): void {
+  cli.addCommand({ name: "example", description: "Example tools", async run(argv, io, signal) {
+    const { run } = await import("./command.js");
+    return run(argv, io, signal);
+  } });
+  cli.extendCommand("run", {
+    flags: "--example [url]", description: "Enable example",
+    configure(value, activation) { activation.enable(typeof value === "string" ? { url: value } : {}); },
+  });
+}
 ```
 
-`command.cli` and `entry` are compiled paths relative to the plugin directory (for example `./dist/cli.js`). The index strips the `./` and `dist/` prefixes so they resolve inside `dist/plugins/<id>/`.
+The host discovers the catalog and explicit --patch, loads registrations, then strictly parses all arguments. Duplicate commands, flags and aliases fail instead of overriding builtins. Registration cannot start processes, access the network or open databases. Patch plugins may export registerCli from their Cordis entry without a manifest. Installed and patch plugin IDs must not collide.
 
-Command registration rules:
+`ctx.evaluator.registerStoreDecorator(name, validate, factory)` registers a factory returning a Store wrapper. Ownership is recorded by plugin ID; names may differ. Only activated plugins create wrappers. Validation precedes component factories. Use Cordis effects for cleanup, runtime.signal for cancellation, and preserve optional Store capabilities and return values.
 
-- The build writes to `commands.json` only plugins declaring both `command.name` and `command.cli`; two plugins claiming the same command fail the build.
-- The runtime reads `dist/plugins/commands.json` first and falls back to scanning `plugins/*/ember-plugin.json` from a source checkout, so a plugin needs its `dist/` built before the CLI can call it.
-- When `argv[0]` matches a plugin command, every remaining argument goes to the plugin CLI unchanged; for example the plugin itself parses `ember-evaluator tracer serve`.
-- Plugin commands match before built-ins during dispatch. Never name a plugin command `run`, `warmup`, `benchmark`, and so on, or it shadows the built-in behavior; `--help` keeps the built-in entry and does not add a duplicate placeholder.
-- Declared plugins appear as placeholder commands in `ember-evaluator --help` under `Commands:` and `Examples:`; directories without a manifest do not appear.
-- A manifest with `entry` but no `command` is still compiled and installed and can be imported by other modules, but gets no CLI entry.
+SDK callers activate extensions with `overrides.plugins: [{ id, config }]`. Persistable JSON options must use environment references for credentials. manifest.json records pluginRuntime.plugins; resume/retry restore options and reject conflicting explicit options.
+
+The tracer plugin owns `--tracer [url]` and `tracer serve/stop/status/logs`. SDK options accept tokenEnv instead of literal token credentials. Default data lives in .cache/tracer under the working directory. Ray Jobs sends portable options to the coordinator; workers register preinstalled modules for version checks without activating coordinator Store wrappers. Tracer mirrors imported remote evidence on the coordinator, not a live worker stream.
+
+The checkout fingerprint includes manifested plugin sources and assets, excluding generated output, dependencies and caches. Tests under each manifested plugin's tests/**/*.test.ts are discovered automatically. Adding plugins requires no host source changes or per-plugin TypeScript/test include entries.
+
 
 ## Reference External Plugins with `--patch`
 

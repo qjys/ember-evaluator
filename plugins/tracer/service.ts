@@ -51,6 +51,7 @@ export class TracerService {
   constructor(
     private readonly config: TracerConfig,
     private readonly warn: (message: string, level?: "info" | "warning") => void,
+    private readonly signal?: AbortSignal,
   ) {}
 
   get base(): string {
@@ -60,7 +61,7 @@ export class TracerService {
   async probe(timeoutMs = 1500): Promise<TracerHealth | null> {
     try {
       const response = await fetch(`${this.config.url}/healthz`, {
-        signal: AbortSignal.timeout(timeoutMs),
+        signal: this.signal ? AbortSignal.any([this.signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs),
       });
       if (!response.ok) return null;
       const body = (await response.json()) as TracerHealth;
@@ -72,6 +73,7 @@ export class TracerService {
 
   /** Returns whether the Collector is usable; failures are reported once and never thrown. */
   async ensure(): Promise<boolean> {
+    if (this.signal?.aborted) return false;
     if (this.state === "ready") return true;
     if (this.state === "unavailable") return false;
 
@@ -122,6 +124,7 @@ export class TracerService {
   }
 
   private async start(): Promise<void> {
+    this.signal?.throwIfAborted();
     try {
       await access(this.config.collector);
     } catch {
@@ -143,8 +146,9 @@ export class TracerService {
 
     const log = join(dirname(this.config.db), "collector.log");
     rotateLog(log);
+    this.signal?.throwIfAborted();
     const fd = openLog(log);
-    const child = spawn(process.execPath, args, { detached: true, env, stdio: ["ignore", fd ?? "ignore", fd ?? "ignore"] });
+    const child = spawn(process.execPath, args, { detached: true, windowsHide: true, env, stdio: ["ignore", fd ?? "ignore", fd ?? "ignore"] });
     if (fd !== undefined) closeSync(fd);
     let exited: string | null = null;
     child.once("error", error => {
@@ -167,6 +171,7 @@ export class TracerService {
     try {
       const deadline = Date.now() + this.config.timeoutMs;
       while (Date.now() < deadline) {
+        this.signal?.throwIfAborted();
         const health = await this.probe(1000);
         if (health) {
           const mismatch = this.databaseMismatch(health);
@@ -183,6 +188,7 @@ export class TracerService {
       }
       throw new Error(`Collector did not become healthy at ${this.config.url} within ${this.config.timeoutMs}ms`);
     } catch (error) {
+      child.kill();
       rmSync(pidFile, { force: true });
       throw error;
     }

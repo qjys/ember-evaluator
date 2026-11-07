@@ -15,8 +15,9 @@ export class TracerClient {
   constructor(
     private readonly config: TracerConfig,
     private readonly warn: (message: string, level?: "info" | "warning") => void,
+    private readonly signal?: AbortSignal,
   ) {
-    this.service = new TracerService(config, warn);
+    this.service = new TracerService(config, warn, signal);
   }
 
   async begin(epoch: string, fingerprint?: string, config?: unknown): Promise<void> {
@@ -57,7 +58,7 @@ export class TracerClient {
     try {
       const response = await fetch(this.service.base + path, {
         headers: this.config.token ? { authorization: `Bearer ${this.config.token}` } : {},
-        signal: AbortSignal.timeout(this.config.timeoutMs),
+        signal: this.requestSignal(),
       });
       if (!response.ok) {
         this.warn(`GET ${path} failed (${response.status} ${response.statusText})`, "warning");
@@ -70,7 +71,13 @@ export class TracerClient {
     }
   }
 
+  private requestSignal(): AbortSignal {
+    const timeout = AbortSignal.timeout(this.config.timeoutMs);
+    return this.signal ? AbortSignal.any([this.signal, timeout]) : timeout;
+  }
+
   private async ensure(): Promise<boolean> {
+    if (this.signal?.aborted) return false;
     if (this.usable) return true;
     this.usable = await this.service.ensure();
     return this.usable;
@@ -79,6 +86,7 @@ export class TracerClient {
   private async post(path: string, body: string, contentType = "application/json"): Promise<void> {
     let last = "unknown error";
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      if (this.signal?.aborted) return;
       try {
         const response = await fetch(this.service.base + path, {
           method: "POST",
@@ -87,7 +95,7 @@ export class TracerClient {
             ...(this.config.token ? { authorization: `Bearer ${this.config.token}` } : {}),
           },
           body,
-          signal: AbortSignal.timeout(this.config.timeoutMs),
+          signal: this.requestSignal(),
         });
         if (response.ok) return;
         last = `${response.status} ${response.statusText}`;

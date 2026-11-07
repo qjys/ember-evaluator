@@ -25,6 +25,19 @@ test("source fingerprint ignores Python bytecode caches but detects source edits
     await writeFile(join(root, "src/worker.pyc"), "legacy bytecode");
     await writeFile(join(root, "src/worker.pyo"), "legacy optimized bytecode");
     expect(await fingerprint()).toBe(initial);
+    await mkdir(join(root, "plugins/example"), { recursive: true });
+    await writeFile(join(root, "plugins/example/ember-plugin.json"), "{}");
+    await writeFile(join(root, "plugins/example/index.ts"), "export const value = 1;\n");
+    const pluginDigest = await fingerprint();
+    expect(pluginDigest).not.toBe(initial);
+    await mkdir(join(root, "plugins/example/dist"));
+    await writeFile(join(root, "plugins/example/dist/index.js"), "generated");
+    expect(await fingerprint()).toBe(pluginDigest);
+    await writeFile(join(root, "plugins/example/index.ts"), "export const value = 2;\n");
+    expect(await fingerprint()).not.toBe(pluginDigest);
+    const changed = await fingerprint();
+    await writeFile(join(root, "plugins/example/view.html"), "<html>dashboard</html>");
+    expect(await fingerprint()).not.toBe(changed);
     await writeFile(join(root, "src/worker.py"), "value = 2\n");
     expect(await fingerprint()).not.toBe(initial);
   } finally {

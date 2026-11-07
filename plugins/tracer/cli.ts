@@ -316,6 +316,7 @@ async function serve(tracer: ResolvedTracer, io: TracerIO): Promise<number> {
   const logDescriptor = openLog(tracer.log);
   const child = spawn(process.execPath, collectorArgs(tracer), {
     detached: true,
+    windowsHide: true,
     env: collectorEnv(tracer),
     stdio: ["ignore", logDescriptor ?? "ignore", logDescriptor ?? "ignore"],
   });

@@ -103,58 +103,51 @@ export function apply(ctx) {
 
 使用 TypeScript 开发时，可从 `ember-evaluator` 包根导入 `HardwareKind`、`Metrics`、`Benchmark`、`Solver`、`PluginFactoryContext` 等公共类型，并实现对应契约。加载前需要编译为 JavaScript，CLI 不直接加载 `.ts` 入口。
 
-## 仓库内插件与 `ember-plugin.json`
 
-`plugins/<id>/` 下的插件要想进入构建产物和 CLI，必须提供 `plugins/<id>/ember-plugin.json`。`pnpm build` 扫描该目录后依次校验清单、按插件自己的 tsconfig 编译、把声明的文件复制到 `dist/plugins/<id>/`，最后生成 `dist/plugins/commands.json`。没有清单的目录不编译、不复制，也不会出现在 `--help` 中，只能在源码中直接 import。
+## 仓库插件构建与扩展
 
-以 [`plugins/tracer/ember-plugin.json`](../../plugins/tracer/ember-plugin.json) 为例：
+`pnpm build` 扫描 `plugins/*/ember-plugin.json`，编译和复制资源到 `dist/external-plugins/<id>`，生成完整索引 `dist/external-plugins/index.json`。无 CLI 的插件也进入索引。`src/plugins` 只存放八类评测组件，其 `dist/plugins` 产物不会被外部插件覆盖。
 
 ```json
 {
-  "id": "tracer",
-  "description": "Trajectory collector: ingest traces, serve the dashboard, and analyze saved runs",
+  "schemaVersion": 1,
+  "id": "example",
   "entry": "./dist/index.js",
-  "bundled": true,
-  "command": { "name": "tracer", "cli": "./dist/cli.js", "description": "Manage the tracer Collector (serve, stop, status, logs, ...)" },
-  "build": { "tsconfig": "./tsconfig.json", "install": ["dist", "collector/view", "collector/schemas"] }
+  "cli": "./dist/cli-register.js",
+  "build": {
+    "tsconfig": "./tsconfig.json",
+    "install": ["dist", { "from": "assets", "to": "dist/assets" }]
+  }
 }
 ```
 
-| 字段 | 必填 | 说明 |
-| --- | --- | --- |
-| `id` | 是 | 必须与目录名一致，同时决定 `dist/plugins/<id>/` 的位置 |
-| `description` | 否 | 插件说明；清单缺少 `command.description` 时作为命令说明 |
-| `version` | 否 | 省略时继承根 `package.json` 的版本，避免两处维护 |
-| `entry` | 否 | 插件模块入口，指向编译后的 JS；写入命令索引，宿主用它加载 `bundled` 插件（当前为 tracer） |
-| `bundled` | 否 | `true` 表示随宿主发布的内置插件；宿主加载器据此识别并校验版本 |
-| `command.name` | 与 `command.cli` 成对 | CLI 子命令名，如 `tracer` |
-| `command.cli` | 与 `command.name` 成对 | 子命令入口，指向编译后的 JS；只声明 `name` 会校验失败 |
-| `command.description` | 否 | 出现在 `--help` 中的命令说明 |
-| `build.tsconfig` | 有 `build` 时必填 | 插件自己的 tsconfig，`outDir` 通常为 `dist` |
-| `build.install` | 有 `build` 时必填 | 要放进运行时的路径；`dist` 的内容平铺到 `dist/plugins/<id>/`，其他路径保留相对位置 |
+ID 必须与目录名一致。version 默认使用宿主包版本。entry 是 Cordis 入口，cli 是可选的 CLI 注册模块。可省略 build.tsconfig 来安装已经编译的 JavaScript；指定时编译输出固定到插件目录下的 dist。build.install 必填；字符串保持相对路径，from/to 指定资源复制位置。安装后清单的相对路径仍然有效，越界路径和符号链接会被拒绝。
 
-构建产物：
+CLI 模块导出 `registerCli(cli: PluginCliRegistrar)`，公共类型从 `ember-evaluator` 导入：
 
-```text
-dist/plugins/
-├── commands.json          # 命令索引，运行时优先读取
-└── tracer/
-    ├── ember-plugin.json  # 原样复制，便于运行时追溯来源
-    ├── cli.js
-    ├── index.js
-    └── collector/...      # build.install 中的静态资源
+```ts
+export function registerCli(cli: PluginCliRegistrar): void {
+  cli.addCommand({ name: "example", description: "Example tools", async run(argv, io, signal) {
+    const { run } = await import("./command.js");
+    return run(argv, io, signal);
+  } });
+  cli.extendCommand("run", {
+    flags: "--example [url]", description: "Enable example",
+    configure(value, activation) { activation.enable(typeof value === "string" ? { url: value } : {}); },
+  });
+}
 ```
 
-清单中的 `command.cli`、`entry` 是相对插件目录的编译产物路径（如 `./dist/cli.js`），写入索引时去掉 `./` 和 `dist/` 前缀，解析到 `dist/plugins/<id>/` 下。
+宿主先发现安装索引和显式 --patch，加载注册声明，再严格解析完整参数。命令、参数及别名冲突时直接报错，不覆盖内置功能。注册阶段不能启动进程、访问网络或打开数据库。patch 插件可在 Cordis 入口同时导出 registerCli，无需 manifest；随包插件和 patch 插件不能使用相同 ID。
 
-命令注册规则：
+运行扩展通过 `ctx.evaluator.registerStoreDecorator(name, validate, factory)` 注册，factory 返回接收底层 Store 的包装函数。宿主记录所属插件，注册名不必等于模块 ID，只为显式启用的插件创建包装。validate 在组件工厂之前执行；使用 Cordis effect 释放资源、runtime.signal 取消网络操作，并保留底层 Store 的可选能力和真实返回值。
 
-- 构建期只把同时声明 `command.name` 和 `command.cli` 的插件写入 `commands.json`；两个插件声明同名命令会直接构建失败。
-- 运行期优先读取 `dist/plugins/commands.json`；从源码树运行时回退扫描 `plugins/*/ember-plugin.json`，因此插件需要先构建出 `dist/` 才能通过 CLI 调用。
-- `argv[0]` 命中插件命令后，后续参数原样交给插件 CLI，例如 `ember-evaluator tracer serve` 由插件自己解析，主程序不再介入。
-- 插件命令在分发阶段先于内置命令匹配。不要把插件命令命名为 `run`、`warmup`、`benchmark` 等内置命令，否则会遮蔽内置行为；同名时 `--help` 只保留内置命令，不重复显示占位项。
-- 已声明的插件会以占位命令出现在 `ember-evaluator --help` 的 `Commands:` 与 `Examples:` 中，未声明的目录不出现。
-- 只声明 `entry`、不声明 `command` 的插件仍会被编译和安装，可被其他模块 import，但没有 CLI 入口。
+SDK 使用 `overrides.plugins: [{ id, config }]` 启用扩展。配置只包含可持久化 JSON，凭证使用环境变量引用。manifest.json 中的 pluginRuntime.plugins 保存启用项和配置，resume/retry 自动恢复；显式传入不同配置拒绝续跑。
+
+tracer 的 `--tracer [url]` 和 `tracer serve/stop/status/logs` 均由 plugins/tracer 注册。SDK 可通过 tokenEnv 指定认证环境变量，不接受 token 明文。默认数据目录为工作目录下的 .cache/tracer。Ray Jobs 把可移植扩展配置传给协调端；worker 只加载预装模块进行注册和版本检查，不创建协调端 Store 包装。tracer 采集协调端已导入的远端证据，不代表 worker 轨迹实时流。
+
+构建摘要包含带 manifest 的插件源码及资源，排除 dist、依赖和缓存。默认测试集自动发现这些插件下的 tests/**/*.test.ts。新增插件不需要修改 src、根 TypeScript include 或测试列表。
+
 
 ## 用 `--patch` 引用外部插件
 

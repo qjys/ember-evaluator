@@ -37,7 +37,7 @@ const FLAGS: Record<string, Setter> = {
 
 function defaultCfg(): Cfg {
   const here = dirname(fileURLToPath(import.meta.url));
-  const root = fileURLToPath(new URL("../../../../", import.meta.url));
+  const root = process.cwd();
   const data = join(root, ".cache", "tracer");
   return {
     host: "0.0.0.0",
