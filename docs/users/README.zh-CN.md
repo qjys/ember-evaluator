@@ -6,6 +6,9 @@
 
 [项目主页](../../README.zh-CN.md) · [Benchmark 指南](benchmarks/README.zh-CN.md) · [FAQ](faq/README.zh-CN.md) · [开发文档](../development/README.md)
 
+
+[图片与 PDF 评测](multimodal.zh-CN.md)：输入模式、Harness 支持情况和运行示例。
+
 ## 安装与快速入门
 
 | 阶段 / 场景 | 文档 |

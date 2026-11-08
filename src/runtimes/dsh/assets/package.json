@@ -5,7 +5,8 @@
   "type": "module",
   "dependencies": {
     "@deepseek-ai/dsh": "0.2.2-rc.1",
-    "pnpm": "11.7.0"
+    "pnpm": "11.7.0",
+    "@deepseek-ai/dsh-sdk-client": "0.2.2-rc.1"
   },
   "overrides": {
     "undici": "8.12.2"

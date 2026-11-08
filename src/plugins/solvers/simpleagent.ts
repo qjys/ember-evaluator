@@ -1,3 +1,4 @@
+import { loadAttachments } from "../../runtimes/multimodal/input.js";
 import type { ErrorCode } from "../../core/errors/registry.js";
 import { join, posix } from "node:path";
 
@@ -76,6 +77,7 @@ function mappedModel(session: EnvironmentSession, model: ModelConfig): ModelConf
 }
 
 export class SimpleAgentSolver implements Solver {
+  readonly inputModalities = ["text", "image"] as const;
   private staged: Promise<StagedPiBundle> | undefined;
 
   constructor(
@@ -152,6 +154,7 @@ export class SimpleAgentSolver implements Solver {
   ): Promise<SolveResult> {
     const extensions = await this.extensions(session, context.signal);
     const runnerInput = projectRunnerInput({
+      ...(input.attachments?.length ? { media: await loadAttachments(input, session, context) } : {}),
       key: context.key,
       input,
       model: mappedModel(session, this.model),

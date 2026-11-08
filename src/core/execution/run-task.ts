@@ -29,6 +29,7 @@ import { classifyError, normalizeFailure } from "../errors/classify.js";
 import { EvaluatorError } from "../errors/evaluator-error.js";
 import { readCollectOutput } from "../artifacts/collect-output.js";
 import { AttemptResources, type RecordAttemptFailure, type RunAttemptStage } from "./attempt-resources.js";
+import { assertLockedAttachments } from "../validation/multimodal.js";
 import { createAttemptStep, expectedStepArtifact, recoverStepEvidence, runAttemptStep, type AttemptStep } from "./run-attempt-step.js";
 
 export type RunTaskOptions = PhaseTimeoutOverrides & {
@@ -199,6 +200,7 @@ export async function runTask(
       ? components.benchmark.prepare(job.ref, source, active, activity)
       : Promise.resolve(preparation.task));
     if (prepared.input.id !== job.taskId) throw new TypeError("Prepared task identity differs from locked selection");
+    assertLockedAttachments(prepared, source);
     if (!dependenciesReady && components.benchmark.verificationRuntime)
       prepared = await prepareEnvironment("verify", prepared, preparationSignal =>
         stage("environment", (active, activity) => materializeVerificationRuntime(prepared!, components.benchmark, active, activity), preparationSignal));
@@ -355,6 +357,9 @@ export async function runTask(
   if (options.includeTaskAnswer === true && lastTask) {
     const answer = components.benchmark.discloseAnswer?.(lastTask);
     record.task = answer === null || answer === undefined ? { prompt: lastTask.input.prompt } : { prompt: lastTask.input.prompt, answer };
+  }
+  if (lastTask?.input.attachments) {
+    record.inputAttachments = structuredClone(lastTask.input.attachments);
   }
   record.finishedAt = new Date().toISOString();
   record.durationMs = performance.now() - started;

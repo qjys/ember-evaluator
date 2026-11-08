@@ -35,7 +35,7 @@ def build_agent(middleware):
     return SimpleNamespace(invoke=lambda state: {"messages": [message]})
 `);
   // The real runner owns stdin; use a small Python launcher to supply it.
-  const { stdout } = await exec(python, ["-c", "import io,runpy,sys;sys.stdin=io.StringIO('task');sys.argv=sys.argv[1:];runpy.run_path(sys.argv[0],run_name='__main__')",
+  const { stdout } = await exec(python, ["-c", "import io,json,runpy,sys;sys.stdin=io.StringIO(json.dumps(dict(prompt='task',media=[])));sys.argv=sys.argv[1:];runpy.run_path(sys.argv[0],run_name='__main__')",
     resolve("src/runtimes/deepagents/assets/runner.py"), "--bundle-dir", value.paths.root],
   { cwd: value.paths.root, signal: value.signal, encoding: "utf8" });
   const warnings: unknown[] = [];

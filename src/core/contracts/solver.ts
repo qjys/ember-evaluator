@@ -1,7 +1,7 @@
 import type { ErrorCode } from "../errors/registry.js";
 import type { EnvironmentSession, RuntimeInstallation, RuntimeRequirement } from "./environment.js";
 import type { AttemptKey, AttemptPaths, SolveResult } from "./result.js";
-import type { PublicTask } from "./task.js";
+import type { InputModality, PublicTask } from "./task.js";
 import type { ActivityListener } from "./activity.js";
 
 export type AttemptContext = {
@@ -14,6 +14,7 @@ export type AttemptContext = {
 };
 
 export interface PreparedSolver {
+  inputModalities?: readonly InputModality[];
   solve(input: PublicTask, context: AttemptContext): Promise<SolveResult>;
   dispose?(signal: AbortSignal): Promise<void>;
 }
@@ -22,6 +23,7 @@ export interface PreparedSolver {
 export type SolverProvenance = Record<string, string>;
 
 export interface Solver {
+  inputModalities?: readonly InputModality[];
   requirements(): RuntimeRequirement[];
   /** Previous identity permits immutable dependency pins to be reused on resume. */
   provenance?(signal: AbortSignal, previous?: SolverProvenance): Promise<SolverProvenance>;

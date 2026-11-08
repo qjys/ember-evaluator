@@ -18,9 +18,9 @@ protocol stream. The composition entry (``agent.py``) resolves the model from
 AGENT_MODEL_* environment variables at import time.
 """
 
-from __future__ import annotations
-
 import argparse
+import base64
+import hashlib
 import json
 import os
 import sys
@@ -31,7 +31,23 @@ from pathlib import Path
 def _serialize_content(content) -> str:
     if isinstance(content, str):
         return content
-    return json.dumps(content, ensure_ascii=False, default=str)
+    return json.dumps(_media_evidence(content), ensure_ascii=False, default=str)
+
+
+def _media_evidence(value):
+    if isinstance(value, list):
+        return [_media_evidence(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _media_evidence(item) for key, item in value.items()}
+    if isinstance(value, str) and value.startswith("data:") and ";base64," in value:
+        header, encoded = value.split(";base64,", 1)
+        data = base64.b64decode(encoded, validate=True)
+        digest = hashlib.sha256(data).hexdigest()
+        directory = Path(os.environ["EVALUATOR_MEDIA_OUTPUT"]) / "media"
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / digest).write_bytes(data)
+        return f"artifact:media/{digest} ({header[5:]})"
+    return value
 
 
 def _usage_record(usage_metadata) -> dict | None:
@@ -66,7 +82,7 @@ class Emitter:
         os.dup2(2, 1)
 
     def emit(self, record: dict) -> None:
-        self._stream.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
+        self._stream.write(json.dumps(_media_evidence(record), ensure_ascii=False, default=str) + "\n")
 
     def flush(self) -> None:
         self._stream.flush()
@@ -77,7 +93,9 @@ def _message_role(msg) -> str:
 
 
 def _run(bundle_dir: Path, emitter: Emitter) -> int:
-    task = sys.stdin.read()
+    request = json.loads(sys.stdin.read())
+    task = request["prompt"]
+    media = request.get("media", [])
     if task.strip() == "":
         raise RuntimeError("the task prompt on stdin is empty")
 
@@ -90,6 +108,8 @@ def _run(bundle_dir: Path, emitter: Emitter) -> int:
         "sessionId": session_id,
         "cwd": cwd,
         "model": {"provider": provider, "name": model_name},
+        "imageTools": ["view_image"] if request.get("imageTools") else [],
+        "inputMediaTypes": [item["mediaType"] for item in media],
     })
 
     if str(bundle_dir) not in sys.path:
@@ -116,8 +136,43 @@ def _run(bundle_dir: Path, emitter: Emitter) -> int:
             return handler(request)
 
     recorder = RecorderMiddleware()
+    if request.get("imageTools"):
+        from langchain.tools import tool, ToolRuntime
+        from langchain_core.messages import HumanMessage, ToolMessage
+        from langgraph.types import Command
+
+        @tool
+        def view_image(path: str, runtime: ToolRuntime) -> Command:
+            """View a PNG, JPEG, or WebP image or screenshot in the public task workspace."""
+            target = (Path.cwd() / path).resolve()
+            if not target.is_relative_to(Path.cwd().resolve()):
+                raise ValueError("image path must stay inside the task workspace")
+            if not target.is_file() or not 0 < target.stat().st_size <= 50 * 1024 * 1024:
+                raise ValueError("image must be a file of at most 50 MiB")
+            data = target.read_bytes()
+            mime = ("image/png" if data.startswith(b"\x89PNG\r\n\x1a\n") else
+                    "image/jpeg" if data.startswith(b"\xff\xd8\xff") else
+                    "image/webp" if data[:4] == b"RIFF" and data[8:12] == b"WEBP" else None)
+            if mime is None:
+                raise ValueError("unsupported or damaged image")
+            uri = f"data:{mime};base64,{base64.b64encode(data).decode('ascii')}"
+            # Chat Completions tool messages are textual. Keep its tool-call reply,
+            # then send the image as a user message to the same target model.
+            return Command(update={"messages": [
+                ToolMessage(content=f"Image: {path}", tool_call_id=runtime.tool_call_id),
+                HumanMessage(content=[{"type": "image_url", "image_url": {"url": uri}}]),
+            ]})
+
+        recorder.tools = [view_image]
     graph = composition.build_agent((recorder,))
-    result = graph.invoke({"messages": [("user", task)]})
+    content = [{"type": "text", "text": task}]
+    for item in media:
+        uri = f"data:{item['mediaType']};base64,{item['data']}"
+        if item["mediaType"] == "application/pdf":
+            content.append({"type": "file", "file": {"filename": item["name"], "file_data": uri}})
+        else:
+            content.append({"type": "image_url", "image_url": {"url": uri}})
+    result = graph.invoke({"messages": [("user", content if media else task)]})
 
     for system_prompt in recorder.system_prompts:
         emitter.emit({"type": "system_prompt", "text": _serialize_content(system_prompt)})

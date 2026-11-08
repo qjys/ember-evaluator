@@ -83,7 +83,7 @@ function servicesInput(services: UserConfig["services"]): Record<string, unknown
     return [name, { name: expectNonEmptyString(model.model, `services.${name}.model`),
       endpoint: expectNonEmptyString(model.base_url, `services.${name}.base_url`), api: model.api ?? "openai-completions",
       ...(model.api_key === undefined ? {} : { apiKey: model.api_key }),
-      ...Object.fromEntries((["provider", "maxTokens", "contextWindow", "retry"] as const).filter(key => model[key] !== undefined).map(key => [key, model[key]])) }];
+      ...Object.fromEntries((["provider", "maxTokens", "contextWindow", "retry", "inputModalities"] as const).filter(key => model[key] !== undefined).map(key => [key, model[key]])) }];
   }));
 }
 

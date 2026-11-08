@@ -1,3 +1,5 @@
+import { resolveModelInput } from "../multimodal/model.js";
+import { loadAttachments, requireInputModalities } from "../multimodal/input.js";
 import { createHash } from "node:crypto";
 import { lstat, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join, posix } from "node:path";
@@ -33,6 +35,7 @@ export async function prepareDeepagentsDocker(
   context: AttemptContext,
   candidate: VerifiedBundle,
 ): Promise<PreparedSolver> {
+  preparation = { ...preparation, model: await resolveModelInput(preparation.model) };
   assertOptions(preparation.options);
   const runtime = session.runtime!;
   if (runtime.persistent)
@@ -128,7 +131,7 @@ export async function prepareDeepagentsDocker(
   if (mapping && preparation.model.endpoint === mapping.originEndpoint) selection.OPENAI_BASE_URL = mapping.baseUrl;
   return preparedAttempt(
     async () => {},
-    (input, signal) =>
+    async (input, signal) =>
       start(
         {
           executable: python,
@@ -143,12 +146,13 @@ export async function prepareDeepagentsDocker(
             ...(binding.secretEnvName === null ? {} : { [binding.secretEnvName]: preparation.auth.value }),
           },
           inheritEnv: false,
-          input: Buffer.from(input.prompt),
+          input: Buffer.from(JSON.stringify({ prompt: input.prompt, imageTools: preparation.model.inputModalities?.includes("image") === true, media: await deepagentsAttachments(input, session, { ...context, signal }, preparation.model) })),
         },
         signal,
       ),
     (handle, solveContext, signal) =>
       consumeDsh(handle, { ...solveContext, signal }, preparation.auth.value, undefined, "DEEPAGENTS"),
+    ["text", "image", "pdf"],
   );
 }
 
@@ -158,6 +162,7 @@ export async function prepareDeepagentsLocal(
   context: AttemptContext,
   candidate: VerifiedBundle,
 ): Promise<PreparedSolver> {
+  preparation = { ...preparation, model: await resolveModelInput(preparation.model) };
   assertOptions(preparation.options);
   const runtime = session.runtime!;
   // venv creation, editable installs and the POSIX venv layout are only
@@ -287,7 +292,7 @@ export async function prepareDeepagentsLocal(
     );
     return preparedAttempt(
       release,
-      (input, signal) =>
+      async (input, signal) =>
         start(
           {
             executable: python,
@@ -296,18 +301,27 @@ export async function prepareDeepagentsLocal(
             env: {
               ...env,
               ...binding.selection,
+              EVALUATOR_MEDIA_OUTPUT: session.agentOutputDir,
               ...(binding.secretEnvName === null ? {} : { [binding.secretEnvName]: preparation.auth.value }),
             },
             inheritEnv: false,
-            input: Buffer.from(input.prompt),
+            input: Buffer.from(JSON.stringify({ prompt: input.prompt, imageTools: preparation.model.inputModalities?.includes("image") === true, media: await deepagentsAttachments(input, session, { ...context, signal }, preparation.model) })),
           },
           signal,
         ),
       (handle, solveContext, signal) =>
         consumeDsh(handle, { ...solveContext, signal }, preparation.auth.value, undefined, "DEEPAGENTS"),
+    ["text", "image", "pdf"],
     );
   } catch (error) {
     await release();
     throw error;
   }
+}
+
+async function deepagentsAttachments(input: import("../../core/contracts/task.js").PublicTask, session: EnvironmentSession, context: AttemptContext, model: import("../../core/contracts/config.js").ModelConfig) {
+  requireInputModalities(input, model.inputModalities ?? ["text"]);
+  const media = await loadAttachments(input, session, context);
+  context.signal.throwIfAborted();
+  return media;
 }

@@ -86,12 +86,14 @@ export function preparedAttempt(
   release: () => Promise<void>,
   start: (input: PublicTask, signal: AbortSignal) => Promise<ProcessHandle>,
   consume: (handle: ProcessHandle, context: AttemptContext, signal: AbortSignal, input: PublicTask) => Promise<SolveResult>,
+  inputModalities: readonly import("../../core/contracts/task.js").InputModality[] = ["text"],
 ): PreparedSolver {
   const controller = new AbortController();
   let flight: Promise<SolveResult> | undefined;
   let disposed = false;
   let cleanup: Promise<void> | undefined;
   return {
+    inputModalities,
     solve: (input, solveContext) => {
       if (disposed || flight)
         return Promise.reject(

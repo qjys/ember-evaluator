@@ -44,7 +44,7 @@ export function dshModelPatch(model: ModelConfig): string {
           apiKeyEnv: DSH_AUTH_ENV,
           ...(model.endpoint === null ? {} : { baseURL: model.endpoint }),
           ...(model.api === null ? {} : { api: model.api }),
-          models: [{ id: model.name, ...(model.maxTokens === undefined ? {} : { maxTokens: model.maxTokens }) }],
+          models: [{ id: model.name, ...(model.inputModalities === undefined ? {} : { input: model.inputModalities.filter(kind => kind !== "pdf") }), ...(model.maxTokens === undefined ? {} : { maxTokens: model.maxTokens }) }],
         },
       },
     } },
@@ -52,6 +52,17 @@ export function dshModelPatch(model: ModelConfig): string {
 }
 
 export type DshPermissionMode = "workspace-write" | "danger-full-access";
+
+/** Replace only the headless text ingress; preserve the installed candidate tools. */
+export function dshSdkPatch(profile: string, workspaceRoot: string, mode: DshPermissionMode): string {
+  return stringify([
+    { id: "headless-startup", disabled: true }, { id: "headless-runner", disabled: true },
+    { id: "session-title-llm", disabled: true },
+    { id: "sandbox-policy", inject: [], config: { mode, workspaceRoot, additionalWritableRoots: [] } },
+    { insert: [{ id: "sdk-app-startup", name: "@deepseek-ai/dsh-sdk-app", config: { profile } },
+      { id: "sdk-jsonrpc-server", name: "@deepseek-ai/dsh-sdk-jsonrpc-server", inject: ["sdkAppStartup", "loader"], config: { maxTokensAsSuccess: false } }] },
+  ]);
+}
 
 /**
  * DSH's sandbox mode with explicit noninteractive approval. The patch replaces

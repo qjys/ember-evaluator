@@ -10,9 +10,20 @@ export type TaskRef = {
   recordKey: JsonValue;
 };
 
+export type TaskAttachment = {
+  /** Public file relative to the solve workspace, using forward slashes. */
+  path: string;
+  sha256: string;
+} & ({ kind: "image"; mediaType: "image/png" | "image/jpeg" | "image/webp" }
+  | { kind: "pdf"; mode: "native" }
+  | { kind: "pdf"; mode: "pages"; pages: number[]; dpi: number; rendererVersion: string });
+
+export type InputModality = "text" | "image" | "pdf";
+
 export type PublicTask = {
   id: string;
   prompt: string;
+  attachments?: TaskAttachment[];
   skillsDirectories?: string[];
   mcpServers?: { name: string; transport: "sse" | "http"; url: string }[];
   /** Public structured input; never carries verifier-private material. */

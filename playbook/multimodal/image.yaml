@@ -1,0 +1,16 @@
+services:
+  default:
+    model: ${MODEL_NAME}
+    base_url: ${MODEL_ENDPOINT}
+    api_key: ${MODEL_API_KEY}
+    inputModalities: [text, image]
+benchmark:
+  name: multimodal-example
+  config:
+    mode: image
+  solver:
+    name: simpleagent
+environment:
+  name: local
+output:
+  directory: ../../.scratch/multimodal-image

@@ -32,6 +32,20 @@ test("OfficeQA configuration rejects unknown, unpinned and invalid fields", () =
     expect(() => parseOfficeQAProV2Config(config)).toThrow();
 });
 
+test("visual mode attaches only explicitly selected public documents", async () => {
+  const directory = await root();
+  const fixture = await officeQAFiles(join(directory, "source"), "pdf");
+  const benchmark = new OfficeQAProV2Benchmark(parseOfficeQAProV2Config({ corpusFormat: "pdf", cacheDir: directory,
+    visualInput: { documents: ["pdfs/public-b.pdf"], mode: "pages", pages: [1], dpi: 144, rendererVersion: "22.02.0" } }), fixture.source,
+  { questions: 2, documents: 2 });
+  const task = await benchmark.prepare({ id: "qid_7", recordKey: "qid_7" }, fixture.lock, signal());
+  expect(task.input.attachments).toEqual([{ kind: "pdf", path: "documents/pdfs/public-b.pdf", mode: "pages",
+    sha256: fixture.lock.files.find(file => file.path === "pdfs/public-b.pdf")!.sha256, pages: [1], dpi: 144, rendererVersion: "22.02.0" }]);
+  expect(JSON.stringify(task.input)).not.toContain("private-page");
+  expect(task.solveEnv.initialFiles).toHaveLength(1);
+  expect(() => parseOfficeQAProV2Config({ visualInput: { documents: ["pdfs/public-b.pdf"], mode: "native" } })).toThrow(/corpusFormat/);
+});
+
 test.each([
   ["officeqa-pro-v2-parsed-json-simpleagent.yaml", "parsed-json", "local"],
   ["officeqa-pro-v2-parsed-json-full.yaml", "parsed-json", "local"],

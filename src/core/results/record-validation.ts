@@ -1,3 +1,4 @@
+import { parseTaskAttachments } from "../validation/multimodal.js";
 import { TRAJECTORY_EVIDENCE_PATH, type AttemptKey, type AttemptRecord, type SolveResult, type VerifyResult } from "../contracts/result.js";
 import { assertEvaluationVerdict } from "./evaluation-outcome.js";
 import { isErrorCode } from "../errors/registry.js";
@@ -144,6 +145,7 @@ export function assertAttemptRecord(value: unknown): asserts value is AttemptRec
     invalid("environments");
   if (value.environments.verificationRuntime !== undefined && !jsonValue(value.environments.verificationRuntime))
     invalid("environments.verificationRuntime");
+  if (value.inputAttachments !== undefined) parseTaskAttachments(value.inputAttachments);
   if (value.task !== undefined) {
     if (!object(value.task) || !text(value.task.prompt) || value.task.prompt.trim() === "") invalid("task");
     const taskKeys = Object.keys(value.task);

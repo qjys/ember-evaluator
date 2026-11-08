@@ -336,7 +336,7 @@ describe("AgentBundle Dify preparation", () => {
   test("locks bundle and runner provenance without probing or installing a remote app", async () => {
     const solver = makeSolver();
     const provenance = await solver.provenance(signal);
-    expect(provenance).toMatchObject({ harness: "dify", runnerVersion: "2", harnessVersionRange: ">=1.17 <2",
+    expect(provenance).toMatchObject({ harness: "dify", runnerVersion: "3", harnessVersionRange: ">=1.17 <2",
       bundle: (await verifyBundleCandidate(fixture)).digest, installation: expect.stringMatching(/^dify:/) });
     expect(provenance.harnessVersion).toBeUndefined();
     expect(requests).toHaveLength(0);

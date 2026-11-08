@@ -1,5 +1,8 @@
+import { resolveModelInput } from "../multimodal/model.js";
+import { loadAttachments, requireInputModalities } from "../multimodal/input.js";
+import { consumePiRunner } from "../pi/process.js";
 import { createHash } from "node:crypto";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { delimiter, dirname, join, posix } from "node:path";
 
 import type { EnvironmentSession } from "../../core/contracts/environment.js";
@@ -9,7 +12,7 @@ import { canonicalJson } from "../../core/results/run-manifest.js";
 import { AgentBundleError, cliJson, parseInstalledBundle, parseVerifiedBundle, type VerifiedBundle } from "../agentbundle/cli.js";
 import { DSH_VERSION } from "./runtime.js";
 
-import { DSH_AUTH_ENV, type DshPermissionMode, dshModelPatch, dshPermissionPatch } from "./model.js";
+import { DSH_AUTH_ENV, type DshPermissionMode, dshModelPatch, dshPermissionPatch, dshSdkPatch } from "./model.js";
 import { consumeDsh } from "./protocol.js";
 
 import { acquireRuntimeLock } from "../../infrastructure/runtime-installation/lock.js";
@@ -23,6 +26,7 @@ export async function prepareDsh(
   context: AttemptContext,
   candidate: VerifiedBundle,
 ): Promise<PreparedSolver> {
+  preparation = { ...preparation, model: await resolveModelInput(preparation.model) };
   const runtime = session.runtime!;
   const stateRoot = runtime.stateRoot;
   if (stateRoot === undefined)
@@ -148,8 +152,27 @@ export async function prepareDsh(
     );
     return preparedAttempt(
       release,
-      (input, signal) =>
-        start(
+      async (input, signal) => {
+        if (input.attachments?.length) {
+          if (candidate.harness.actualVersion !== undefined && candidate.harness.actualVersion !== DSH_VERSION) {
+            throw new AgentBundleError("BENCHMARK_UNSUPPORTED", `DSH multimodal input requires validated version ${DSH_VERSION}`);
+          }
+          requireInputModalities(input, (preparation.model.inputModalities ?? ["text"]).filter(kind => kind !== "pdf"));
+          const media = await loadAttachments(input, session, { ...context, signal });
+          const sdkPatch = join(context.paths.agent, "sdk.patch.yaml");
+          await writeFile(sdkPatch, dshSdkPatch(profile, session.workdir, permissionMode));
+          const sdkOverlay = path(state, "sdk.patch.yaml");
+          if (customHome) await writeHomeConfig(sdkOverlay, await readFile(sdkPatch, "utf8"));
+          else await session.upload(sdkPatch, sdkOverlay, signal);
+          signal.throwIfAborted();
+          return start({ executable: node, args: [path(runtime.root, "dsh-multimodal-runner.mjs")], cwd: session.workdir,
+            env: { ...env, [DSH_AUTH_ENV]: preparation.auth.value }, inheritEnv: false,
+            input: Buffer.from(JSON.stringify({ dsh, home, profile, key: context.key, patches: [modelOverlay, patch, sdkOverlay],
+              moduleBase: local && preparation.localDsh ? preparation.localDsh.entry : path(runtime.root, "package.json"),
+              workdir: session.workdir, outputDir: session.agentOutputDir, prompt: input.prompt, media,
+              provider: preparation.model.endpoint === null ? preparation.model.provider : "ember-evaluator", model: preparation.model.name })), }, signal);
+        }
+        return start(
           {
             executable: node,
             args: [...(local && preparation.localDsh ? [] : ["--import", outputHook]), dsh, "--profile", profile,
@@ -160,8 +183,12 @@ export async function prepareDsh(
             input: Buffer.from(input.prompt),
           },
           signal,
-        ),
-      (handle, solveContext, signal) => consumeDsh(handle, { ...solveContext, signal, environment: session }, preparation.auth.value),
+        );
+      },
+      (handle, solveContext, signal, input) => input.attachments?.length
+        ? consumePiRunner(handle, preparation.auth.value, join(solveContext.paths.agent, "stderr.log"), signal, solveContext.warning, solveContext.activity)
+        : consumeDsh(handle, { ...solveContext, signal, environment: session }, preparation.auth.value),
+      ["text", "image"],
     );
   } catch (error) {
     await release();

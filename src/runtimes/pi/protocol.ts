@@ -1,3 +1,5 @@
+import { parseInputModalities, parseTaskAttachments } from "../../core/validation/multimodal.js";
+import { parseEncodedAttachments, type EncodedAttachment } from "../multimodal/wire.js";
 import { isErrorCode, type ErrorCode } from "../../core/errors/registry.js";
 import type { ModelConfig, RuntimeAuth } from "../../core/contracts/config.js";
 import type { AttemptKey, SolveResult } from "../../core/contracts/result.js";
@@ -9,6 +11,7 @@ import { LIVE_LINES } from "../../core/progress/live-progress.js";
 
 export type RunnerInput = {
   schemaVersion: 1;
+  media?: EncodedAttachment[];
   key: AttemptKey;
   input: PublicTask;
   model: ModelConfig;
@@ -84,10 +87,12 @@ function taskResources(value: Record<string, unknown>): Pick<PublicTask, "skills
 export function projectRunnerInput(source: RunnerInputSource): RunnerInput {
   return {
     schemaVersion: 1,
+    ...(source.media === undefined ? {} : { media: source.media }),
     key: { runId: source.key.runId, taskId: source.key.taskId, attemptId: source.key.attemptId },
-    input: { id: source.input.id, prompt: source.input.prompt, ...taskResources(source.input) },
+    input: { id: source.input.id, prompt: source.input.prompt, ...taskResources(source.input), ...(source.input.attachments === undefined ? {} : { attachments: parseTaskAttachments(source.input.attachments) }) },
     model: {
       name: source.model.name,
+      ...(source.model.inputModalities === undefined ? {} : { inputModalities: [...source.model.inputModalities] }),
       endpoint: source.model.endpoint,
       provider: source.model.provider,
       api: source.model.api,
@@ -107,16 +112,16 @@ export function projectRunnerInput(source: RunnerInputSource): RunnerInput {
 
 export function parseRunnerInput(value: unknown): RunnerInput {
   const root = record(value, "runner input");
-  fields(root, ["schemaVersion", "key", "input", "model", "auth", "workdir", "outputDir", "extensions", "piConfigDir", "piSettings", "toolPolicy"], "runner input");
+  fields(root, ["schemaVersion", "key", "input", "model", "auth", "workdir", "outputDir", "extensions", "piConfigDir", "piSettings", "toolPolicy", "media"], "runner input");
   if (root.schemaVersion !== 1) throw new TypeError("runner input schemaVersion must be 1");
   const toolPolicy =
     root.toolPolicy === undefined ? undefined : parseShellToolPolicy(root.toolPolicy, "runner input.toolPolicy");
   const key = record(root.key, "runner input.key");
   fields(key, ["runId", "taskId", "attemptId"], "runner input.key");
   const input = record(root.input, "runner input.input");
-  fields(input, ["id", "prompt", "skillsDirectories", "mcpServers"], "runner input.input");
+  fields(input, ["id", "prompt", "skillsDirectories", "mcpServers", "attachments"], "runner input.input");
   const model = record(root.model, "runner input.model");
-  fields(model, ["name", "endpoint", "provider", "api", "maxTokens", "contextWindow", "retry"], "runner input.model");
+  fields(model, ["name", "endpoint", "provider", "api", "maxTokens", "contextWindow", "retry", "inputModalities"], "runner input.model");
   if (model.contextWindow !== undefined && (typeof model.contextWindow !== "number" || !Number.isSafeInteger(model.contextWindow) || model.contextWindow <= 0))
     throw new TypeError("runner input.model.contextWindow must be a positive integer");
   if (model.maxTokens !== undefined && (typeof model.maxTokens !== "number" || !Number.isSafeInteger(model.maxTokens) || model.maxTokens <= 0))
@@ -134,6 +139,7 @@ export function parseRunnerInput(value: unknown): RunnerInput {
   fields(auth, ["value", "reference"], "runner input.auth");
   return {
     schemaVersion: 1,
+    ...(root.media === undefined ? {} : { media: parseEncodedAttachments(root.media) }),
     key: {
       runId: text(key.runId, "runner input.key.runId"),
       taskId: text(key.taskId, "runner input.key.taskId"),
@@ -143,8 +149,10 @@ export function parseRunnerInput(value: unknown): RunnerInput {
       id: text(input.id, "runner input.input.id"),
       prompt: text(input.prompt, "runner input.input.prompt"),
       ...taskResources(input),
+      ...(input.attachments === undefined ? {} : { attachments: parseTaskAttachments(input.attachments) }),
     },
     model: {
+      ...(model.inputModalities === undefined ? {} : { inputModalities: parseInputModalities(model.inputModalities) }),
       name: text(model.name, "runner input.model.name"),
       endpoint: nullableText(model.endpoint, "runner input.model.endpoint"),
       provider: nullableText(model.provider, "runner input.model.provider"),

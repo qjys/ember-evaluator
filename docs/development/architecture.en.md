@@ -108,3 +108,7 @@ Pi packaging rewrites only the runner's dependency copies. Preparation modules r
 For cross-module changes, run dependency checks, type checks, and relevant tests. Build/runtime asset changes also require a build and actual installed-package validation. See [plugin development](plugins.en.md), [runtime validation](runtime-validation.en.md), and [repository development rules](../../AGENTS.md#开发流程) for component and real-environment checks.
 
 Update both language versions when responsibilities, calls, or ownership change. Component details belong in plugin/Benchmark guides; user operations belong in user guides. Dated design/task records retain decisions and validation evidence, but must not be the only architecture reference.
+
+## Multimodal input
+
+Benchmarks declare public attachments and stage their locked files through the environment. Core checks attachment declarations and Solver capabilities. Runtime adapters read environment-local files, verify digests, render explicit PDF pages, and construct Harness messages. See [multimodal development](multimodal.md).

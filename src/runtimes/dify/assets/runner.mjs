@@ -8,7 +8,8 @@
 //         {"schemaVersion":1,"type":"result","result":{finalText,usage}} or
 //         {"schemaVersion":1,"type":"error","code":...,"message":...}
 // side effect: trajectory.jsonl / session.jsonl / dify-run-trace.jsonl in outputDir
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 
 class WorkflowError extends Error {
@@ -60,10 +61,56 @@ function asRecord(value) {
 
 async function observe(body, apiKey) {
   const observation = { runId: null, status: "", outputs: null, error: "", nodes: [], events: [] };
+  const inputs = { task: body.task };
+  if (body.media?.length) {
+    const parameters = await fetch(`${body.baseUrl}/v1/parameters`, { headers: { Authorization: `Bearer ${apiKey}` } });
+    if (!parameters.ok) throw new WorkflowError("CONFIG_INVALID", `Cannot inspect Dify file inputs (${parameters.status})`);
+    const schema = await parameters.json();
+    const fileInput = (schema.user_input_form ?? []).flatMap(entry => Object.entries(entry))
+      .find(([kind, config]) => ["file", "file-list"].includes(kind) && config.variable === body.filesInput);
+    if (!fileInput) throw new WorkflowError("CONFIG_INVALID", `Dify workflow has no file input ${body.filesInput}`);
+    if (fileInput[0] === "file" && body.media.length !== 1) throw new WorkflowError("CONFIG_INVALID", "Dify single-file input cannot receive multiple attachments");
+    const config = fileInput[1];
+    for (const item of body.media) {
+      const type = item.mediaType === "application/pdf" ? "document" : "image";
+      if (Array.isArray(config.allowed_file_types) && !config.allowed_file_types.includes(type))
+        throw new WorkflowError("CONFIG_INVALID", `Dify file variable does not accept ${type}`);
+      if (Array.isArray(config.allowed_file_extensions) && config.allowed_file_extensions.length &&
+          !config.allowed_file_extensions.some(extension => extension === "*" || item.name.toLowerCase().endsWith(extension.toLowerCase())))
+        throw new WorkflowError("CONFIG_INVALID", `Dify file variable rejects attachment extension: ${item.name}`);
+    }
+    if (Array.isArray(config.allowed_file_upload_methods) && !config.allowed_file_upload_methods.includes("local_file")) throw new WorkflowError("CONFIG_INVALID", "Dify file variable disables local uploads");
+    if (typeof config.max_length === "number" && body.media.length > config.max_length) throw new WorkflowError("CONFIG_INVALID", "Dify file variable attachment limit exceeded");
+    const files = [];
+    await mkdir(body.outputDir, { recursive: true });
+    const receiptsPath = join(body.outputDir, "dify-files.json");
+    const saved = await readFile(receiptsPath, "utf8").then(JSON.parse).catch(() => null);
+    const receipts = saved?.baseUrl === body.baseUrl && saved?.appId === body.appId && saved?.user === "ember-evaluator" ? saved :
+      { baseUrl: body.baseUrl, appId: body.appId, user: "ember-evaluator", files: {} };
+    for (const item of body.media) {
+      const bytes = Buffer.from(item.data, "base64");
+      const digest = createHash("sha256").update(bytes).digest("hex");
+      let id = receipts.files[digest];
+      if (typeof id !== "string" || !id) {
+        const form = new FormData();
+        form.append("user", "ember-evaluator");
+        form.append("file", new Blob([bytes], { type: item.mediaType }), item.name);
+        const upload = await fetch(`${body.baseUrl}/v1/files/upload`, { method: "POST", headers: { Authorization: `Bearer ${apiKey}` }, body: form });
+        if (!upload.ok) throw new WorkflowError(httpFailureCode(upload.status), `Dify attachment upload failed (${upload.status})`);
+        const receipt = await upload.json();
+        if (typeof receipt.id !== "string" || !receipt.id) throw new WorkflowError("SOLVER_PROTOCOL_INVALID", "Dify upload returned no file ID");
+        id = receipt.id;
+        receipts.files[digest] = id;
+        await writeFile(receiptsPath, JSON.stringify(receipts) + "\n");
+      }
+      files.push({ type: item.mediaType === "application/pdf" ? "document" : "image", transfer_method: "local_file", upload_file_id: id });
+    }
+    inputs[body.filesInput] = fileInput[0] === "file" ? files[0] : files;
+  }
   const response = await fetch(`${body.baseUrl}/v1/workflows/run`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
-    body: JSON.stringify({ inputs: { task: body.task }, response_mode: "streaming", user: "ember-evaluator" }),
+    body: JSON.stringify({ inputs, response_mode: "streaming", user: "ember-evaluator" }),
   });
   if (!response.ok) {
     const text = await response.text().catch(() => "");

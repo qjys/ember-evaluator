@@ -1,3 +1,4 @@
+import { parseInputModalities } from "../core/validation/multimodal.js";
 import type { HardwareKind } from "../core/contracts/hardware.js";
 import { parseHardware } from "./hardware.js";
 import { parseDeployment, type Deployment } from "./deployment.js";
@@ -15,6 +16,7 @@ export type BenchmarkSelection = Omit<PluginSelection, "service"> & {
   verifier?: string | PluginSelection;
 };
 export type ServiceInput = {
+  inputModalities?: import("../core/contracts/task.js").InputModality[];
   model: string;
   base_url: string;
   api_key?: string;
@@ -74,10 +76,11 @@ export function parseUserConfig(value: unknown): UserConfig {
   for (const [name, service] of Object.entries(services)) {
     if (!/^[A-Za-z_][A-Za-z0-9_-]*$/u.test(name)) throw new TypeError(`services.${name} is not a valid service name`);
     const entry = expectRecord(service, `services.${name}`);
-    rejectUnknown(entry, ["model", "base_url", "api_key", "api", "provider", "maxTokens", "contextWindow", "retry"], `services.${name}`);
+    rejectUnknown(entry, ["model", "base_url", "api_key", "api", "provider", "maxTokens", "contextWindow", "retry", "inputModalities"], `services.${name}`);
     const parsed: ServiceInput = { model: expectNonEmptyString(entry.model, `services.${name}.model`), base_url: expectNonEmptyString(entry.base_url, `services.${name}.base_url`) };
     for (const key of ["api_key", "api", "provider"] as const)
       if (entry[key] !== undefined) parsed[key] = expectNonEmptyString(entry[key], `services.${name}.${key}`);
+    if (entry.inputModalities !== undefined) parsed.inputModalities = parseInputModalities(entry.inputModalities);
     if (entry.maxTokens !== undefined) parsed.maxTokens = expectPositiveInteger(entry.maxTokens, `services.${name}.maxTokens`);
     if (entry.contextWindow !== undefined) parsed.contextWindow = expectPositiveInteger(entry.contextWindow, `services.${name}.contextWindow`);
     if (entry.retry !== undefined) {

@@ -9,6 +9,7 @@ function stubRuntime() {
   const providers = new Map<string, { models: RegisteredModel[] }>();
   return {
     providers,
+    getModels() { return [...providers.values()].flatMap(provider => provider.models); },
     registerProvider(id: string, definition: { models: RegisteredModel[] }) {
       providers.set(id, definition);
     },

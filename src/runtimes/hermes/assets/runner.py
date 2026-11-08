@@ -72,6 +72,30 @@ def main() -> None:
     root = Path(sys.argv.pop(1)).resolve()
     sys.path.insert(0, str(root))
     install_output_capture()
+    if os.environ.get("EVALUATOR_HERMES_MEDIA") == "1":
+        import run_agent
+        media = json.loads(sys.stdin.read())
+        original_agent = run_agent.AIAgent
+        pending = True
+
+        class MultimodalAgent(original_agent):
+            def run_conversation(self, user_message, *args, **kwargs):
+                nonlocal pending
+                if not pending:
+                    return super().run_conversation(user_message, *args, **kwargs)
+                pending = False
+                if not self._model_supports_vision():
+                    raise RuntimeError("Target Hermes model does not support native image input")
+                if not self._provider_supports_vision_tool_messages():
+                    raise RuntimeError("Target Hermes protocol cannot preserve image tool results")
+                content = [{"type": "text", "text": user_message}]
+                for item in media:
+                    if item["mediaType"] == "application/pdf":
+                        raise RuntimeError("Hermes native PDF input is unsupported")
+                    content.append({"type": "image_url", "image_url": {"url": f"data:{item['mediaType']};base64,{item['data']}"}})
+                return super().run_conversation(content, *args, **kwargs)
+
+        run_agent.AIAgent = MultimodalAgent
     from hermes_cli.main import main as hermes_main
 
     hermes_main()

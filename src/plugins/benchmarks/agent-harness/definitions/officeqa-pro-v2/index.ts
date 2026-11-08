@@ -6,7 +6,7 @@ import { officeQAVerificationRuntime } from "./runtime/runtime.js";
 import { expectNonEmptyString, expectRecord } from "../../../../../core/validation/input.js";
 import { type EffectiveConfig } from "../../../../../core/contracts/config.js";
 import type { Benchmark } from "../../../../../core/contracts/benchmark.js";
-import type { PreparedTask, SourceLock, TaskRef } from "../../../../../core/contracts/task.js";
+import type { PreparedTask, SourceLock, TaskRef, TaskAttachment } from "../../../../../core/contracts/task.js";
 import type { ActivityListener } from "../../../../../core/contracts/activity.js";
 import type { VerificationRuntime } from "../../../../../core/contracts/verification-runtime.js";
 import { fingerprintConfig } from "../../../../../core/results/run-manifest.js";
@@ -102,11 +102,24 @@ export class OfficeQAProV2Benchmark implements Benchmark {
     let build: NonNullable<PreparedTask["solveEnv"]["build"]>;
     try { build = await building; }
     catch (error) { if (this.builds.get(key) === building) this.builds.delete(key); throw error; }
+    const attachments: TaskAttachment[] = [];
+    const initialFiles: PreparedTask["solveEnv"]["initialFiles"] = [];
+    if (this.config.visualInput) {
+      const { documents, ...policy } = this.config.visualInput;
+      // The public experiment selects documents, never the private source_files answer column.
+      for (const document of documents) {
+        const locked = lock.files.find(file => file.path === document);
+        if (!locked) throw new Error(`OfficeQA visual document is absent from the source lock: ${document}`);
+        const path = `documents/${document}`;
+        attachments.push({ kind: "pdf", path, sha256: locked.sha256, ...policy });
+        initialFiles.push({ source: await this.source.file(lock, document, signal), target: path });
+      }
+    }
     return {
-      input: { id: row.uid, prompt: `Answer the following question using the complete document corpus in /corpus (${this.config.corpusFormat}). You may search the corpus, run code, and obtain supplemental public information when necessary. Do not retrieve benchmark questions or reference answers online.\n\n${row.question}\n\nReturn a concise final answer on one line inside <FINAL_ANSWER>...</FINAL_ANSWER>. Put any explanation outside these tags.` },
+      input: { id: row.uid, ...(attachments.length ? { attachments } : {}), prompt: `Answer the following question using the complete document corpus in /corpus (${this.config.corpusFormat}). You may search the corpus, run code, and obtain supplemental public information when necessary. Do not retrieve benchmark questions or reference answers online.\n\n${row.question}\n\nReturn a concise final answer on one line inside <FINAL_ANSWER>...</FINAL_ANSWER>. Put any explanation outside these tags.` },
       verification: { answer: row.answer, source_docs: row.source_docs, source_files: row.source_files,
         tolerance: this.config.tolerance, corpusFormat: this.config.corpusFormat },
-      solveEnv: { workdir: "/workspace", image: null, initialFiles: [], runtime: [], build, network: "bridge" },
+      solveEnv: { workdir: "/workspace", image: null, initialFiles, runtime: [], build, network: "bridge" },
       verifyEnv: null, transfer: null,
       artifactCollection: { kind: "artifacts", workdir: "/workspace", paths: ["/workspace"] },
       preparationTimeoutSeconds: { solve: 3600, verify: 3600 },

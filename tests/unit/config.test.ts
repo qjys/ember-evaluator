@@ -5,6 +5,7 @@ import { afterEach, expect, test } from "vitest";
 import { stringify } from "yaml";
 import { loadConfig, loadSavedConfig } from "../../src/application/config.js";
 import { exportConfig } from "../../src/config/export.js";
+import { fingerprintResumeConfig } from "../../src/core/results/run-manifest.js";
 
 const roots: string[] = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true }))); });
@@ -14,6 +15,17 @@ async function file(value: unknown, filename = "experiment.yaml") {
   const path = join(root, filename); await writeFile(path, stringify(value)); return path;
 }
 const load = (path: string) => loadConfig(path, {}, { KEY: "secret" });
+
+test("model input capabilities survive export and saved loading and change resume identity", async () => {
+  const path = await file({ services: { default: { ...services.default, inputModalities: ["text", "image"] } }, benchmark: "gsm8k" });
+  const loaded = await load(path);
+  expect(exportConfig(loaded)).toHaveProperty("services.default.inputModalities", ["text", "image"]);
+  const saved = await loadSavedConfig(await file(loaded.persisted, "saved.yaml"), { KEY: "secret" });
+  expect(saved.experiment.services.default?.inputModalities).toEqual(["text", "image"]);
+  expect(JSON.stringify(loaded.persisted)).not.toContain("secret");
+  const text = await load(await file({ services, benchmark: "gsm8k", output: loaded.experiment.output }));
+  expect(fingerprintResumeConfig(loaded.persisted)).not.toBe(fingerprintResumeConfig(text.persisted));
+});
 
 test.each([undefined, { name: "local" }, { name: "local", config: {} }])("local execution and preparation default to one with scheduler %j", async scheduler => {
   const loaded = await load(await file({ services, benchmark: "gsm8k", ...(scheduler ? { scheduler } : {}),

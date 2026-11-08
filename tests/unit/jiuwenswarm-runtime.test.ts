@@ -12,10 +12,11 @@ test("pins the semver form of the companion runtime within the declared range", 
   expect(JIUWENSWARM_VERSION).toBe("0.2.5");
 });
 
-test("materializes only the vendored AgentBundle SDK assets", async () => {
+test("materializes the AgentBundle SDK and image bridge without installing the host Harness", async () => {
   const installation = await jiuwenswarmRuntimeInstallation(new AbortController().signal);
   expect(installation.commands).toEqual([]);
   expect(installation.files.map(file => file.target)).toContain("agentbundle/run.mjs");
+  expect(installation.files.map(file => file.target)).toContain("jiuwenswarm/multimodal-runner.py");
   expect(installation.probes.length).toBeGreaterThanOrEqual(1);
   expect(installation.id).toMatch(/^jiuwenswarm:/);
 });

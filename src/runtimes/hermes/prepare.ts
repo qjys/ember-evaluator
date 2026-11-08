@@ -1,3 +1,5 @@
+import { resolveModelInput } from "../multimodal/model.js";
+import { loadAttachments, requireInputModalities } from "../multimodal/input.js";
 import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { delimiter, dirname, join, posix } from "node:path";
@@ -33,6 +35,12 @@ async function mergeHermesModelConfig(target: string, model: ModelConfig, signal
     if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) doc = parsed as Record<string, unknown>;
   }
   const additions = parseYaml(hermesModelSettings(model)) as Record<string, unknown>;
+  if (model.inputModalities?.includes("image")) {
+    const agent = doc.agent && typeof doc.agent === "object" && !Array.isArray(doc.agent) ? doc.agent as Record<string, unknown> : {};
+    if (agent.image_input_mode === "text") throw new AgentBundleError("CONFIG_INVALID", "Hermes agent.image_input_mode=text conflicts with image input");
+    const currentModel = doc.model && typeof doc.model === "object" && !Array.isArray(doc.model) ? doc.model as Record<string, unknown> : {};
+    return stringifyYaml({ ...doc, ...additions, model: { ...currentModel, supports_vision: true }, agent: { ...agent, image_input_mode: "native" } });
+  }
   return stringifyYaml({ ...doc, ...additions });
 }
 
@@ -42,6 +50,7 @@ export async function prepareHermes(
   context: AttemptContext,
   candidate: VerifiedBundle,
 ): Promise<PreparedSolver> {
+  preparation = { ...preparation, model: await resolveModelInput(preparation.model) };
   const runtime = session.runtime!;
   // Hermes is provisioned into the runtime root at build time (see
   // hermesRuntimeInstallation), so it runs under any environment, not just
@@ -58,7 +67,7 @@ export async function prepareHermes(
   const version = preparation.harnessVersion ?? HERMES_VERSION;
   const identity = createHash("sha256")
     .update(
-      canonicalJson({ kind: "hermes", candidate, runtime: runtime.identity, settings: hermesModelSettings(preparation.model) }),
+      canonicalJson({ kind: "hermes", candidate, runtime: runtime.identity, settings: hermesModelSettings(preparation.model), inputModalities: preparation.model.inputModalities ?? ["text"] }),
     )
     .digest("hex");
   const configuredHome = local ? preparation.options.hermeshome : undefined;
@@ -143,8 +152,12 @@ export async function prepareHermes(
     const usageFile = join(context.paths.agent, "usage.json");
     return preparedAttempt(
       release,
-      (input, signal) =>
-        start(
+      async (input, signal) => {
+        requireInputModalities(input, (preparation.model.inputModalities ?? ["text"]).filter(kind => kind !== "pdf"));
+        if (input.attachments?.length && preparation.model.api !== "openai-completions") throw new AgentBundleError("BENCHMARK_UNSUPPORTED", "Hermes image input requires the validated openai-completions route");
+        const media = await loadAttachments(input, session, { ...context, signal });
+        signal.throwIfAborted();
+        return start(
           {
             executable: "bash",
             args: [path(runtime.root, "hermes-agent", "scripts", "run-in-hermes-env"), "python",
@@ -156,17 +169,22 @@ export async function prepareHermes(
               HERMES_HOME: state,
               OFFICE_AGENT_WORKDIR: join(state, "work", "office-agent"),
               [HERMES_AUTH_ENV]: preparation.auth.value,
+              ...(media.length ? { EVALUATOR_HERMES_MEDIA: "1" } : {}),
             },
             inheritEnv: false,
-            input: null,
+            input: media.length ? Buffer.from(JSON.stringify(media)) : null,
           },
           signal,
-        ),
+        );
+      },
       (handle, solveContext, signal, input) =>
         consumeHermes(handle, { ...solveContext, signal }, preparation.auth.value, usageFile, undefined, {
           prompt: input.prompt,
           model: preparation.model.name,
+          inputModalities: preparation.model.inputModalities ?? ["text"],
+          imageInputMode: preparation.model.inputModalities?.includes("image") ? "native" : "text",
         }),
+      ["text", "image"],
     );
   } catch (error) {
     await release();

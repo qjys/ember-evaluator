@@ -8,6 +8,7 @@ import type { JsonValue } from "../../core/contracts/task.js";
 import { PhaseTimeoutError } from "../../core/policies/phase-timeout.js";
 import { ModelOutputTruncatedError } from "../../core/policies/model-output-truncated.js";
 import { TrajectoryWriter } from "../../core/artifacts/trajectory.js";
+import { externalizeMedia } from "../multimodal/evidence.js";
 
 const DEFAULT_LIMITS = {
   maxEnvelopeBytes: 64 * 1024 * 1024,
@@ -337,7 +338,7 @@ export async function consumeJiuwenswarm(
         await trajectory.append("tool_call", toolCallData(payload, secret));
       } else if (eventType === "chat.tool_result" || eventType === "tool.result") {
         await flushText();
-        await trajectory.append("tool_result", toolResultData(payload, secret));
+        await trajectory.append("tool_result", externalizeMedia(toolResultData(payload, secret), context.paths.agent));
       }
       if (eventType === "chat.usage_summary") {
         const mapped = usageOf(payload);

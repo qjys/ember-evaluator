@@ -101,6 +101,7 @@ export async function runAttemptStep(
   try {
     record.solve = await stage("solve", async (signal, activity) => {
       const input = { id: task.input.id, prompt: task.input.prompt,
+        ...(task.input.attachments === undefined ? {} : { attachments: structuredClone(task.input.attachments) }),
         ...(task.input.payload === undefined ? {} : { payload: structuredClone(task.input.payload) }),
         ...(task.input.skillsDirectories === undefined ? {} : { skillsDirectories: [...task.input.skillsDirectories] }),
         ...(task.input.mcpServers === undefined ? {} : { mcpServers: task.input.mcpServers.map(server => ({ name: server.name, transport: server.transport, url: server.url })) }) };

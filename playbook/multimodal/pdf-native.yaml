@@ -1,0 +1,18 @@
+services:
+  default:
+    model: ${MODEL_NAME}
+    base_url: ${MODEL_ENDPOINT}
+    api_key: ${MODEL_API_KEY}
+    inputModalities: [text, pdf]
+benchmark:
+  name: multimodal-example
+  config:
+    mode: native
+  solver:
+    name: agentbundle
+    config:
+      path: ${DEEPAGENTS_BUNDLE_PATH}
+environment:
+  name: local
+output:
+  directory: ../../.scratch/multimodal-pdf-native

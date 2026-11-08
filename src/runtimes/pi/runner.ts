@@ -1,3 +1,5 @@
+import { requireInputModalities } from "../multimodal/input.js";
+import { externalizeMedia } from "../multimodal/evidence.js";
 import type { ErrorCode } from "../../core/errors/registry.js";
 import {
   createAgentSession,
@@ -39,7 +41,7 @@ installEnvProxy();
 
 const SYSTEM_PROMPT =
   "You are an autonomous coding agent. Complete the user's task in the current working directory. Use the available tools when needed, then give a concise final answer.";
-const INPUT_LIMIT = 1024 * 1024;
+const INPUT_LIMIT = 75 * 1024 * 1024;
 
 class RunnerFailure extends Error {
   constructor(
@@ -204,7 +206,7 @@ async function inputFromStdin(): Promise<RunnerInput> {
   for await (const part of process.stdin) {
     const chunk = Buffer.from(part as Uint8Array);
     bytes += chunk.byteLength;
-    if (bytes > INPUT_LIMIT) throw new RunnerFailure("SOLVER_PROTOCOL_INVALID", "runner input exceeds 1 MiB");
+    if (bytes > INPUT_LIMIT) throw new RunnerFailure("SOLVER_PROTOCOL_INVALID", "runner input exceeds 75 MiB");
     chunks.push(chunk);
   }
   const source = Buffer.concat(chunks).toString("utf8").trim();
@@ -230,7 +232,8 @@ export function contextWindowFor(contextBudget: number | undefined): number {
 
 export async function modelFor(input: RunnerInput, runtime: ModelRuntime) {
   const defaults = await loadModelDefaults();
-  const registered = input.model.provider === null ? undefined : runtime.getModel(input.model.provider, input.model.name);
+  const matches = runtime.getModels().filter(model => model.id === input.model.name);
+  const registered = input.model.provider === null ? (matches.length === 1 ? matches[0] : undefined) : runtime.getModel(input.model.provider, input.model.name);
   const maxTokens = outputLimitFor(defaults, input.model.name, input.model.provider, input.model.maxTokens, registered?.maxTokens);
   let providerId: string;
   if (input.model.endpoint !== null) {
@@ -249,7 +252,7 @@ export async function modelFor(input: RunnerInput, runtime: ModelRuntime) {
           name: input.model.name,
           api: input.model.api as Api,
           reasoning: false,
-          input: ["text"],
+          input: (input.model.inputModalities ?? registered?.input ?? ["text"]).filter((kind): kind is "text" | "image" => kind !== "pdf"),
           cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
           contextWindow: contextWindowFor(input.model.contextWindow ?? input.model.maxTokens),
           maxTokens,
@@ -264,10 +267,10 @@ export async function modelFor(input: RunnerInput, runtime: ModelRuntime) {
   await runtime.setRuntimeApiKey(providerId, input.auth.value);
   const model = runtime.getModel(providerId, input.model.name);
   if (!model) throw new RunnerFailure("MODEL_REQUEST_INVALID", `model ${providerId}/${input.model.name} is not available`);
-  if (input.model.maxTokens === undefined) return { ...model,
+  if (input.model.maxTokens === undefined) return { ...model, ...(input.model.inputModalities === undefined ? {} : { input: input.model.inputModalities.filter((kind): kind is "text" | "image" => kind !== "pdf") }),
     ...(input.model.contextWindow === undefined ? {} : { contextWindow: contextWindowFor(input.model.contextWindow) }),
     maxTokens: outputLimitFor(defaults, input.model.name, input.model.provider, undefined, model.maxTokens) };
-  return { ...model, maxTokens: input.model.maxTokens, contextWindow: contextWindowFor(input.model.contextWindow ?? input.model.maxTokens) };
+  return { ...model, ...(input.model.inputModalities === undefined ? {} : { input: input.model.inputModalities.filter((kind): kind is "text" | "image" => kind !== "pdf") }), maxTokens: input.model.maxTokens, contextWindow: contextWindowFor(input.model.contextWindow ?? input.model.maxTokens) };
 }
 
 function assistantMessages(messages: unknown[]): AssistantMessage[] {
@@ -409,6 +412,15 @@ export async function run(input: RunnerInput, options: RunnerOptions = {}): Prom
     refreshOnCreate: false,
   });
   const model = await modelFor(input, runtime);
+  requireInputModalities(input.input, model.input);
+  if (input.media?.some(item => item.mediaType === "application/pdf")) throw new RunnerFailure("BENCHMARK_UNSUPPORTED", "Pi does not support native PDF input");
+  if (input.media?.length && settingsManager.getSettings().images?.blockImages) throw new RunnerFailure("CONFIG_INVALID", "Pi images.blockImages prevents this task from receiving its images");
+  if (input.media?.length && !model.input.includes("image")) throw new RunnerFailure("BENCHMARK_UNSUPPORTED", "Pi target model does not support image input");
+  const expectedMedia = (input.input.attachments ?? []).flatMap(item => item.kind === "pdf" && item.mode === "pages"
+    ? item.pages.map(page => `${item.path}#page=${page}`) : [item.path]);
+  if (expectedMedia.length && JSON.stringify(expectedMedia) !== JSON.stringify(input.media?.map(item => item.name))) {
+    throw new RunnerFailure("SOLVER_PROTOCOL_INVALID", "Prepared media does not match the task attachment order");
+  }
   const resourceLoader = await resourceLoaderFor(input, settingsManager, systemPrompt);
   // `tools` deliberately stays out of createAgentSession: the SDK treats that
   // option as an allow-list, which would filter bundle extension tools out of
@@ -433,8 +445,9 @@ export async function run(input: RunnerInput, options: RunnerOptions = {}): Prom
     },
   });
   let writeFailure: unknown;
+  let modalityFailure: RunnerFailure | undefined;
   const write = (type: string, data: JsonValue, durable = false) => {
-    void trajectory.append(type, redact(data, input.auth.value), durable).catch(error => {
+    void trajectory.append(type, externalizeMedia(redact(data, input.auth.value), input.outputDir), durable).catch(error => {
       writeFailure ??= error;
       void session.abort().catch(() => {});
     });
@@ -453,6 +466,12 @@ export async function run(input: RunnerInput, options: RunnerOptions = {}): Prom
       lines: lines.slice(-LIVE_LINES).map(line => safeLiveText(line, [input.auth.value])) } });
   };
   const event = (value: AgentSessionEvent) => {
+    if (value.type === "tool_execution_end" && Array.isArray(value.result?.content) && value.result.content.some((block: unknown) =>
+      typeof block === "object" && block !== null && "type" in block && block.type === "image") &&
+        (!model.input.includes("image") || settingsManager.getSettings().images?.blockImages)) {
+      modalityFailure = new RunnerFailure("BENCHMARK_UNSUPPORTED", `Tool ${value.toolName} returned an image that the configured model/settings cannot receive`);
+      void session.abort().catch(() => {});
+    }
     if (value.type === "message_start" && value.message.role === "assistant") activity("Requesting model response");
     else if (value.type === "message_update") activity("Receiving model response", [], true);
     else if (value.type === "tool_execution_start") activity(`Running tool ${value.toolName}`, [toolActivity(value.toolName, value.args)]);
@@ -500,11 +519,14 @@ export async function run(input: RunnerInput, options: RunnerOptions = {}): Prom
     await persistTrajectory("failed to initialize trajectory", () =>
       trajectory.append(
         "start",
-        redact(json({ input: input.input, systemPrompt, model: input.model, tools }), input.auth.value),
+        redact(json({ input: input.input, systemPrompt, model: input.model, tools,
+          capabilities: { modelInput: model.input, images: settingsManager.getSettings().images ?? {} } }), input.auth.value),
         true,
       ),
     );
-    await session.prompt(input.input.prompt, { expandPromptTemplates: false, source: "rpc" });
+    await session.prompt(input.input.prompt, { expandPromptTemplates: false, source: "rpc",
+      ...(input.media?.length ? { images: input.media.map(item => ({ type: "image" as const, data: item.data, mimeType: item.mediaType })) } : {}) });
+    if (modalityFailure) throw modalityFailure;
     await persistTrajectory("failed to flush trajectory", () => trajectory.flush());
     if (writeFailure !== undefined)
       throw new RunnerFailure("STORE_WRITE_FAILED", "failed to write trajectory", { cause: writeFailure });
@@ -523,10 +545,10 @@ export async function run(input: RunnerInput, options: RunnerOptions = {}): Prom
     return result;
   } catch (error) {
     primaryFailure = true;
-    const failure =
+    const failure = modalityFailure ?? (
       writeFailure === undefined
         ? error
-        : new RunnerFailure("STORE_WRITE_FAILED", "failed to write trajectory", { cause: writeFailure });
+        : new RunnerFailure("STORE_WRITE_FAILED", "failed to write trajectory", { cause: writeFailure }));
     try {
       await trajectory.append("usage", json(usageSnapshot()), true);
       await trajectory.append("error", redact(json(failure), input.auth.value), true);
@@ -539,6 +561,10 @@ export async function run(input: RunnerInput, options: RunnerOptions = {}): Prom
     session.dispose();
     try {
       await trajectory.close();
+      // Compaction reads the native session during execution; compact evidence only
+      // after disposal, so the model always receives the original image bytes.
+      const lines = (await readFile(sessionPath, "utf8")).split("\n").filter(Boolean);
+      await writeFile(sessionPath, lines.map(line => JSON.stringify(externalizeMedia(JSON.parse(line) as JsonValue, input.outputDir))).join("\n") + "\n");
     } catch (error) {
       if (!primaryFailure)
         throw new RunnerFailure("STORE_WRITE_FAILED", "failed to close trajectory", { cause: error });

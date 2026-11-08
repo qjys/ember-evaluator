@@ -1,0 +1,81 @@
+kind: app
+version: 0.3.0
+app:
+  name: evaluator-multimodal-example
+  mode: workflow
+  icon: 📷
+  icon_background: '#E4FBCC'
+dependencies: []
+workflow:
+  conversation_variables: []
+  environment_variables: []
+  features:
+    file_upload:
+      enabled: true
+      allowed_file_types: [image, document]
+      allowed_file_upload_methods: [local_file]
+      number_limits: 32
+  graph:
+    nodes:
+      - id: start
+        type: custom
+        position: {x: 0, y: 0}
+        data:
+          type: start
+          title: Input
+          variables:
+            - variable: task
+              label: Task
+              type: paragraph
+              required: true
+            - variable: files
+              label: Files
+              type: file-list
+              required: true
+              allowed_file_types: [image, document]
+              allowed_file_upload_methods: [local_file]
+              max_length: 32
+      - id: solve
+        type: custom
+        position: {x: 320, y: 0}
+        data:
+          type: llm
+          title: Target model
+          model:
+            provider: langgenius/openai/openai
+            name: gpt-4.1
+            mode: chat
+            completion_params: {}
+          prompt_template:
+            - role: user
+              text: '{{#start.task#}}'
+          context: {enabled: false, variable_selector: []}
+          vision:
+            enabled: true
+            configs:
+              detail: high
+              variable_selector: [start, files]
+      - id: end
+        type: custom
+        position: {x: 640, y: 0}
+        data:
+          type: end
+          title: Answer
+          outputs:
+            - variable: answer
+              value_selector: [solve, text]
+    edges:
+      - id: start-solve
+        source: start
+        sourceHandle: source
+        target: solve
+        targetHandle: target
+        type: custom
+        data: {sourceType: start, targetType: llm}
+      - id: solve-end
+        source: solve
+        sourceHandle: source
+        target: end
+        targetHandle: target
+        type: custom
+        data: {sourceType: llm, targetType: end}

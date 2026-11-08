@@ -1,10 +1,10 @@
 import { expectNonEmptyString, expectRecord, rejectUnknown } from "../../core/validation/input.js";
 
-export type DifyOptions = { baseUrl: string; registryPath?: string };
+export type DifyOptions = { baseUrl: string; registryPath?: string; filesInput?: string };
 
 export function parseDifyOptions(value: unknown): DifyOptions {
   const config = expectRecord(value, "agentbundle.dify");
-  rejectUnknown(config, ["baseUrl", "registryPath"], "agentbundle.dify");
+  rejectUnknown(config, ["baseUrl", "registryPath", "filesInput"], "agentbundle.dify");
   const baseUrl = expectNonEmptyString(config.baseUrl, "agentbundle.dify.baseUrl").replace(/\/+$/, "");
   let url: URL;
   try { url = new URL(baseUrl); }
@@ -15,6 +15,7 @@ export function parseDifyOptions(value: unknown): DifyOptions {
   }
   return {
     baseUrl,
+    ...(config.filesInput === undefined ? {} : { filesInput: expectNonEmptyString(config.filesInput, "agentbundle.dify.filesInput") }),
     ...(config.registryPath === undefined ? {} : {
       registryPath: expectNonEmptyString(config.registryPath, "agentbundle.dify.registryPath"),
     }),

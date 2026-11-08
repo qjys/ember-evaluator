@@ -29,3 +29,7 @@ Solver 的 `runtimeInstallation()` 返回 `RuntimeInstallation` 时，可以设�
 - 用 `inspect` 检查注册名、配置类型、未知字段和服务绑定。
 - 跑一份受控实验，检查返回的 `finalText`、用量、评分和产物。若实现会调用模型或工具，分别覆盖失败、超时和取消后的退出与清理。
 - 声明额外运行时或需要 Docker、Ray 时，在对应环境验证安装与执行。受控本地样例只覆盖本地路径。
+
+## 图片与 PDF 输入
+
+Solver 或 PreparedSolver 通过可选 `inputModalities` 声明实际支持的输入，省略时仅支持文本。具体消息转换、模型能力检查和最小例子见[多模态插件开发](multimodal.md)。

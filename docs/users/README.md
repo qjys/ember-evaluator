@@ -19,6 +19,8 @@ Install and complete one scenario before exploring common operations. `benchmark
 | Call evaluations from a Node.js project | [Node.js SDK](sdk.md) |
 | Run evaluations with an agent | [Ember Evaluator skill (中文)](../../skills/ember-evaluator/SKILL.md) |
 
+[Image and PDF evaluation](multimodal.md): input modes, Harness matrix, and runnable examples.
+
 ## Common Operations
 
 | Goal | Guide |

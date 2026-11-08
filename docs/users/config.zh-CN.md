@@ -281,3 +281,7 @@ SimpleQA/HealthBench 通过 benchmark.config.judgeService 显式选择 services 
 `ember-evaluator retry --run <run-id>` 为原 Run 的当前网络失败任务创建新 Attempt。有效零分、普通阶段超时和非网络错误不补测。网络访问仅在对应操作内有限重试，不自动补测整题；每次显式手动请求可为符合条件的任务追加一个 Attempt。`run.taskRetry` 已删除，旧 YAML 需要移除此字段。Ray Jobs 使用本页的独立 `deployment` 连接原网关，未注册为 Scheduler 插件。详见[网络故障补测](network-retry.zh-CN.md)。
 
 [返回用户手册](README.zh-CN.md) · [快速上手](quick-start.zh-CN.md)
+
+## 多模态输入
+
+模型服务可设置 `inputModalities: [text, image, pdf]`，只声明目标端点实际接收的类型。附件准备、PDF 模式及 Harness 限制见[图片与 PDF 评测](multimodal.zh-CN.md)。

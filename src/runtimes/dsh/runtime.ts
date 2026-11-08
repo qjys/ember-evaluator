@@ -40,6 +40,7 @@ export async function describeDshBundleRuntime(
     try {
       const manifest = JSON.parse(await readFile(dshManifest, { encoding: "utf8", signal }));
       manifest.dependencies["@deepseek-ai/dsh"] = version;
+      manifest.dependencies["@deepseek-ai/dsh-sdk-client"] = version;
       await writeFile(join(directory, "package.json"), JSON.stringify(manifest, null, 2) + "\n", { signal });
       await npm(["install", "--package-lock-only", "--ignore-scripts", "--no-audit", "--no-fund"], signal, network, directory);
       return { installation: await dshRuntimeInstallation(signal, version, directory), version, directory };
@@ -52,12 +53,14 @@ export async function describeDshBundleRuntime(
     throw new AgentBundleError("ENV_RUNTIME_INSTALL_FAILED", "DSH reuse supports local or docker environments");
   const localDsh = previous?.localDsh ?? await inspectLocalDsh(process.env, signal);
   const outputHook = dshOutputRuntimeFile();
+  const mediaRunner = { source: fileURLToPath(new URL("./assets/multimodal-runner.mjs", import.meta.url)), target: "dsh-multimodal-runner.mjs" };
   const hash = createHash("sha256");
   await hashRuntimeSource(hash, outputHook.source, signal);
+  await hashRuntimeSource(hash, mediaRunner.source, signal);
   return { localDsh, version: localDsh.version, installation: {
     id: `external-dsh:${JSON.stringify(localDsh)}:${hash.digest("hex")}`,
     cacheName: "dsh-external",
-    files: [...await agentBundleRuntimeFiles(), outputHook], commands: [], probes: [agentBundleVersionProbe()],
+    files: [...await agentBundleRuntimeFiles(), outputHook, mediaRunner], commands: [], probes: [agentBundleVersionProbe()],
   } };
 }
 
@@ -99,6 +102,7 @@ export async function dshRuntimeInstallation(signal: AbortSignal, version = DSH_
     { source: directory ? join(directory, "package.json") : dshManifest, target: "package.json" },
     { source: directory ? join(directory, "package-lock.json") : fileURLToPath(new URL("./assets/runtime-lock.json", import.meta.url)), target: "package-lock.json" },
     dshOutputRuntimeFile(),
+    { source: fileURLToPath(new URL("./assets/multimodal-runner.mjs", import.meta.url)), target: "dsh-multimodal-runner.mjs" },
     ...await agentBundleRuntimeFiles(),
   ];
   const hash = createHash("sha256").update("dsh-runtime-sdk-1");

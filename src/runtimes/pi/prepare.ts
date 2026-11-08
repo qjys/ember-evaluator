@@ -1,3 +1,4 @@
+import { loadAttachments } from "../multimodal/input.js";
 import { createHash } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join, posix } from "node:path";
@@ -98,6 +99,7 @@ export async function preparePi(
           ? { ...preparation.model, endpoint: mapping.baseUrl }
           : preparation.model;
         const runnerInput = projectRunnerInput({
+            ...(input.attachments?.length ? { media: await loadAttachments(input, session, { ...context, signal }) } : {}),
           key: context.key,
           input,
           model,
@@ -107,7 +109,8 @@ export async function preparePi(
           piConfigDir: codingAgentDir,
           piSettings: settings,
         });
-        return start(
+          signal.throwIfAborted();
+          return start(
           {
             executable: node,
             args: [runner],
@@ -120,6 +123,7 @@ export async function preparePi(
       },
       (handle, solveContext, signal) =>
         consumePiRunner(handle, preparation.auth.value, join(solveContext.paths.agent, "stderr.log"), signal, solveContext.warning, solveContext.activity),
+      ["text", "image"],
     );
   } catch (error) {
     await release();

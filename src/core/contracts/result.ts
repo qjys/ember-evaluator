@@ -91,6 +91,8 @@ export type AttemptRecord = {
   readiness?: { roundId: string; readyAt: string; queueDurationMs: number };
   /** Original prompt and, when the benchmark has one, its textual reference answer. */
   task?: { prompt: string; answer?: JsonValue };
+  /** Public input identity, independent of optional prompt/answer disclosure. */
+  inputAttachments?: import("./task.js").TaskAttachment[];
 };
 
 export type AttemptStepResult = {

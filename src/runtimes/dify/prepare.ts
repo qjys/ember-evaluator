@@ -14,6 +14,11 @@ import { preparedAttempt, sameCandidate } from "../agentbundle/preparation-state
 import { verifyBundleCandidate } from "../agentbundle/sdk.js";
 import type { DifyOptions } from "./config.js";
 import { consumeDify } from "./protocol.js";
+import { loadAttachments, requireInputModalities } from "../multimodal/input.js";
+import type { ModelConfig } from "../../core/contracts/config.js";
+import { assertDifyFileWorkflow } from "./multimodal.js";
+import { assertDifyModelCapabilities } from "./model-capabilities.js";
+import { attachmentModalities } from "../../core/validation/multimodal.js";
 
 export async function prepareDify(
   bundlePath: string,
@@ -21,6 +26,7 @@ export async function prepareDify(
   session: EnvironmentSession,
   context: AttemptContext,
   candidate: VerifiedBundle,
+  model?: ModelConfig,
 ): Promise<PreparedSolver> {
   const runtime = session.runtime;
   if (!runtime?.root || !runtime.identity) throw new AgentBundleError("ENV_RUNTIME_INSTALL_FAILED", "Dify requires an environment-prepared runtime");
@@ -70,18 +76,31 @@ export async function prepareDify(
     const apiKey = installed.apiKey;
     const local = runtime.persistent;
     const path = local ? join : posix.join;
-    return preparedAttempt(async () => {}, (input, solveSignal) => session.start({
-      executable: local ? process.execPath : "node",
-      args: [path(runtime.root, "dify", "runner.mjs")],
-      cwd: session.workdir,
-      env: local ? runtimeProcessEnvironment() : {},
-      inheritEnv: false,
-      input: Buffer.from(`${JSON.stringify({
-        schemaVersion: 1, baseUrl: options.baseUrl, apiKey, task: input.prompt,
-        appId: installed.appId, attempt: context.key, outputDir: session.agentOutputDir,
-        bundleDigest: installed.digest, installationId: installed.installationId, reused: installed.reused,
-      })}\n`, "utf8"),
-    }, solveSignal), (handle, solveContext, solveSignal) => consumeDify(handle, solveContext, solveSignal, apiKey));
+    return preparedAttempt(async () => {}, async (input, solveSignal) => {
+      requireInputModalities(input, model?.inputModalities ?? ["text"]);
+      requireInputModalities(input, ["text", "image", "pdf"]);
+      if (input.attachments?.length && !options.filesInput) throw new EvaluatorError("CONFIG_INVALID", "Dify attachments require agentbundle.dify.filesInput");
+      if (input.attachments?.length && options.filesInput) {
+        const models = await assertDifyFileWorkflow(bundlePath, options.filesInput, model?.name ?? "");
+        const capabilities = await assertDifyModelCapabilities(options.baseUrl, models, attachmentModalities(input.attachments), solveSignal);
+        await writeFile(join(context.paths.agent, "dify-model-capabilities.json"), JSON.stringify(capabilities) + "\n");
+      }
+      const media = await loadAttachments(input, session, { ...context, signal: solveSignal });
+      solveSignal.throwIfAborted();
+      return session.start({
+        executable: local ? process.execPath : "node",
+        args: [path(runtime.root, "dify", "runner.mjs")],
+        cwd: session.workdir,
+        env: local ? runtimeProcessEnvironment() : {},
+        inheritEnv: false,
+        input: Buffer.from(`${JSON.stringify({
+          schemaVersion: 1, baseUrl: options.baseUrl, apiKey, task: input.prompt,
+          ...(media.length ? { media, filesInput: options.filesInput } : {}),
+          appId: installed.appId, attempt: context.key, outputDir: session.agentOutputDir,
+          bundleDigest: installed.digest, installationId: installed.installationId, reused: installed.reused,
+        })}\n`, "utf8"),
+      }, solveSignal);
+    }, (handle, solveContext, solveSignal) => consumeDify(handle, solveContext, solveSignal, apiKey), ["text", "image", "pdf"]);
   } finally {
     await release();
   }

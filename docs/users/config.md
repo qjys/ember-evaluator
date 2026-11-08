@@ -281,3 +281,7 @@ Plugin authors: see [profile publication](../development/benchmarks.en.md#publis
 `ember-evaluator retry --run <run-id>` creates attempts for current network failures in the original run. Valid zeros, ordinary phase timeouts, and non-network errors are ineligible. Network operations retry within their own bounds rather than whole tasks; each manual request may add one eligible attempt. Removed `run.taskRetry` must be deleted from old YAML. Ray Jobs connects the original gateway through separate `deployment`, not a Scheduler plugin. See [network recovery](network-retry.md).
 
 [User guide](README.md) · [Quick start](quick-start.md)
+
+## Multimodal input
+
+Model services accept optional `inputModalities: [text, image, pdf]`. Declare only the capabilities implemented by your target endpoint. See [image and PDF evaluation](multimodal.md) for task attachments and Harness restrictions.

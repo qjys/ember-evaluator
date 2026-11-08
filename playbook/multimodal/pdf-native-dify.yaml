@@ -1,0 +1,20 @@
+services:
+  default:
+    model: ${MODEL_NAME}
+    base_url: ${DIFY_BASE}/v1
+    inputModalities: [text, pdf]
+benchmark:
+  name: multimodal-example
+  config:
+    mode: native
+  solver:
+    name: agentbundle
+    config:
+      path: ./dify
+      dify:
+        baseUrl: ${DIFY_BASE}
+        filesInput: files
+environment:
+  name: local
+output:
+  directory: ../../.scratch/multimodal-dify-pdf-native

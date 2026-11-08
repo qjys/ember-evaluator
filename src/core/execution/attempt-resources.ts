@@ -9,6 +9,8 @@ import { classifyError, type ErrorContext } from "../errors/classify.js";
 import { redactEvidence } from "../errors/diagnostics.js";
 import type { ErrorCode } from "../errors/registry.js";
 import { assertJsonValue } from "../validation/input.js";
+import { attachmentModalities, parseTaskAttachments } from "../validation/multimodal.js";
+import { EvaluatorError } from "../errors/evaluator-error.js";
 
 export type RunAttemptStage = <T>(
   phase: Phase,
@@ -147,6 +149,14 @@ export class AttemptResources {
   }
 
   solve(input: PublicTask, context: AttemptContext) {
+    if (input.attachments !== undefined) {
+      let attachments;
+      try { attachments = parseTaskAttachments(input.attachments); }
+      catch (cause) { throw new EvaluatorError("TASK_DATA_INVALID", `Task ${input.id}: invalid attachments`, {}, { cause }); }
+      const supported = this.solverHandle?.inputModalities ?? this.components.solver.inputModalities ?? ["text"];
+      const missing = attachmentModalities(attachments).filter(kind => !supported.includes(kind));
+      if (missing.length) throw new EvaluatorError("BENCHMARK_UNSUPPORTED", `Task ${input.id}: solver does not support ${missing.join(", ")} input`);
+    }
     return this.solverHandle ? this.solverHandle.solve(input, context) : this.components.solver.solve(input, this.solveEnvironment, context);
   }
 

@@ -1,9 +1,10 @@
 import { expect, test } from "vitest";
 import { RayControl } from "../../src/infrastructure/ray/control.js";
+import { parseRuntimeServices } from "../../src/infrastructure/ray/runtime-services.js";
 
 test("Ray runtime handshake sends the independent Judge credential to a worker", async () => {
   const control = new RayControl({
-    default: { model: { name: "solver", endpoint: "https://example.invalid/v1", api: "openai-completions", provider: null },
+    default: { model: { name: "solver", endpoint: "https://example.invalid/v1", api: "openai-completions", provider: null, inputModalities: ["text", "image", "pdf"] },
       auth: { value: "solver-secret", reference: "MODEL_API_KEY" } },
     judge: { model: { name: "judge", endpoint: "https://judge.invalid/v1", api: "openai-completions", provider: null },
       auth: { value: "judge-secret", reference: "JUDGE_MODEL_API_KEY" } },
@@ -19,6 +20,7 @@ test("Ray runtime handshake sends the independent Judge credential to a worker",
     pluginVersions,
   });
   expect(Object.keys(runtime as object)).toEqual(["services"]);
+  expect(parseRuntimeServices(JSON.parse(JSON.stringify(runtime))).default?.model.inputModalities).toEqual(["text", "image", "pdf"]);
   expect(runtime).toMatchObject({
     services: { default: { auth: { value: "solver-secret", reference: null } }, judge: { model: { name: "judge" }, auth: { value: "judge-secret", reference: null } } },
   });

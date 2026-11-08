@@ -66,6 +66,30 @@ test("includeTaskAnswer stores the prompt and only a textual answer", async () =
   expect(JSON.stringify(disclosed.task)).not.toContain("hidden");
 });
 
+test.each(["undeclared", "image", "unlocked"] as const)("multimodal tasks enforce source locks and external solver capabilities: %s", async mode => {
+  const { components, inputs, events } = await taskFixture();
+  const attachment = { kind: "image" as const, path: "public.png", mediaType: "image/png" as const, sha256: "a".repeat(64) };
+  const prepare = components.benchmark.prepare.bind(components.benchmark);
+  components.benchmark.prepare = async (...args) => {
+    const task = await prepare(...args);
+    return { ...task, input: { ...task.input, attachments: [attachment] } };
+  };
+  if (mode === "image") components.solver = { ...components.solver, inputModalities: ["text", "image"] };
+  const locked = { ...source, files: mode === "unlocked" ? [] : [{ path: "public.png", sha256: attachment.sha256, origin: "fixture" }] };
+  const result = await runTask(onDemand(job), components, locked, new AbortController().signal);
+  if (mode === "image") {
+    expect(result.errors).toEqual([]);
+    expect(inputs[0]?.attachments).toEqual([attachment]);
+    expect(result.inputAttachments).toEqual([attachment]);
+    expect(result.task).toBeUndefined();
+  } else {
+    expect(inputs).toEqual([]);
+    expect(result.errors).toContainEqual(expect.objectContaining({ code: mode === "unlocked" ? "TASK_DATA_INVALID" : "BENCHMARK_UNSUPPORTED" }));
+    if (mode === "unlocked") expect(events).not.toContain("solve.environment");
+    else expect(events).toContain("solve.cleanup");
+  }
+});
+
 test("a scheduler without the required stream interface is rejected before creating a run", async () => {
   const { components, config } = await fixture();
   const create = vi.spyOn(components.store, "create");

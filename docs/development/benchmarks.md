@@ -215,3 +215,7 @@ ember-evaluator run .scratch/benchmark-init/experiment.yaml --patch tests/fixtur
 类型检查、构建和测试命令见[开发规范](../../AGENTS.md#代码开发规范)。测试记录区分受控回归与真实运行，完整交付仍需引用接入验收结果。
 
 [返回开发文档](README.md) · [Benchmark 评测要求与验收指南](benchmark-evaluation-requirements.md) · [插件开发与加载](plugins.md)
+
+## 图片与 PDF 题目
+
+新增多模态题目时，使用 `PublicTask.attachments` 声明公开文件，不把附件藏在 `payload` 中。最小例子、来源锁、准备路径及验证要求见[多模态插件开发](multimodal.md)。

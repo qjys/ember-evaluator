@@ -1,7 +1,7 @@
 import type { ErrorCode } from "../../core/errors/registry.js";
 import { createHash } from "node:crypto";
 import { access, constants, readFile } from "node:fs/promises";
-import { basename, delimiter, isAbsolute, join } from "node:path";
+import { basename, delimiter, dirname, isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { RuntimeInstallation } from "../../core/contracts/environment.js";
 import { canonicalJson } from "../../core/results/run-manifest.js";
@@ -20,6 +20,15 @@ export async function jiuwenswarmBundleRuntimeInstallation(path: string, environ
  * compatibility range (`>=0.2,<0.3`).
  */
 export const JIUWENSWARM_VERSION = "0.2.5";
+export const jiuwenswarmMultimodalRunner = fileURLToPath(new URL("./assets/multimodal-runner.py", import.meta.url));
+
+/** Use the installed entry point's environment, never an unrelated system Python. */
+export async function resolveJiuwenswarmPython(command: string): Promise<string> {
+  const python = join(dirname(command), process.platform === "win32" ? "python.exe" : "python");
+  if (!(await isExecutable(python)))
+    throw new JiuwenswarmRuntimeError("ENV_RUNTIME_INSTALL_FAILED", "JiuwenSwarm image input requires the Python interpreter beside its process CLI entry point");
+  return python;
+}
 /** Default headless task deadline; agentbundle.jiuwenswarmTimeoutSeconds can override it. */
 export const JIUWENSWARM_TIMEOUT_SECONDS = 600;
 
@@ -152,7 +161,7 @@ export async function resolveJiuwenswarmCommand(
  */
 export async function jiuwenswarmRuntimeInstallation(signal: AbortSignal): Promise<RuntimeInstallation> {
   signal.throwIfAborted();
-  const files = await agentBundleRuntimeFiles();
+  const files = [...await agentBundleRuntimeFiles(), { source: jiuwenswarmMultimodalRunner, target: "jiuwenswarm/multimodal-runner.py" }];
   const hash = createHash("sha256").update("jiuwenswarm-runtime-sdk-1");
   for (const file of files) {
     hash.update(file.target);
@@ -235,6 +244,7 @@ export async function jiuwenswarmDockerRuntimeInstallation(
   };
   const files = [
     ...agentBundleFiles,
+    { source: jiuwenswarmMultimodalRunner, target: "jiuwenswarm/multimodal-runner.py" },
     { source: jiuwenswarmRewriteRequirements, target: "jiuwenswarm/rewrite-requirements.mjs" },
     { source: jiuwenswarmRwLockProbe, target: "jiuwenswarm/probe-rwlock.py" },
     ...JIUWENSWARM_DOCKER_SOURCE_ENTRIES.map(entry => ({

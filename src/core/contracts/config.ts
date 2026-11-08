@@ -1,5 +1,5 @@
 import type { HardwareKind } from "./hardware.js";
-import type { JsonValue, PhaseTimeoutOverrides } from "./task.js";
+import type { InputModality, JsonValue, PhaseTimeoutOverrides } from "./task.js";
 
 export type CliOverrides = {
   model?: string;
@@ -9,6 +9,7 @@ export type CliOverrides = {
 };
 
 export type ModelConfig = {
+  inputModalities?: InputModality[];
   name: string;
   endpoint: string | null;
   provider: string | null;

@@ -241,7 +241,7 @@ export class AgentBundleSolver implements Solver {
     const candidate = this.candidate;
     const runtime = session.runtime;
     if (candidate?.harness.name === "dify" && this.options.dify !== undefined)
-      return prepareDify(this.path, this.options.dify, session, context, candidate);
+      return prepareDify(this.path, this.options.dify, session, context, candidate, this.model);
     if (!candidate || !runtime?.stateRoot)
       throw new AgentBundleError(
         "ENV_RUNTIME_INSTALL_FAILED",

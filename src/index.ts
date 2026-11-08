@@ -1,5 +1,6 @@
 export type * from "./core/contracts/hardware.js";
 export type * from "./core/contracts/task.js";
+export { parseTaskAttachments, parseInputModalities } from "./core/validation/multimodal.js";
 export type * from "./core/contracts/result.js";
 export type * from "./core/contracts/errors.js";
 export { EvaluatorError } from "./core/errors/evaluator-error.js";
