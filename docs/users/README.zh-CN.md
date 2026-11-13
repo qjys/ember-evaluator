@@ -13,7 +13,7 @@
 
 | 阶段 / 场景 | 文档 |
 | --- | --- |
-| 两仓安装、构建、全局 CLI 与任意目录运行 | [安装指南](installation.zh-CN.md) |
+| 安装 CLI 和 Agent Skill、从任意目录运行 | [安装指南](installation.zh-CN.md) |
 | 第一次质量评测 | [GSM8K 两题快速上手](quick-start.zh-CN.md) |
 | Docker 终端任务 | [Terminal-Bench 4.0 入门](quick-start/terminalbench.zh-CN.md) |
 | 模型服务性能链路 | [AgentX 性能入门](quick-start/agentx.zh-CN.md) |
@@ -29,6 +29,7 @@
 | YAML、Profile、默认值与环境变量 | [配置指南](config.zh-CN.md) |
 | 模型、Judge、SimpleAgent、AgentBundle 与 Dify | [Solver 与模型服务](solvers.zh-CN.md) |
 | 抽题、续跑、报告、轨迹与 DSH 完整工具输出 | [日常操作](usage.zh-CN.md) |
+| 在浏览器查看 Attempt 轨迹、性能指标和反馈 | [Tracer](tracer.zh-CN.md) |
 | 任务并发、环境准备、流水线与超时 | [并发指南](concurrency.zh-CN.md) |
 | 在原 run 中恢复网络失败任务 | [网络故障补测](network-retry.zh-CN.md) |
 

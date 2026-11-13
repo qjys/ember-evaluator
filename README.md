@@ -2,10 +2,8 @@
   <img src="imgs/ember-evaluator-logo.png" alt="Ember Evaluator" width="520">
 </h1>
 
-<h3 align="center">Many ways to evaluate. One framework to bring them together.</h3>
-
 <p align="center">
-  A plugin-based framework for evaluating agent harnesses, inference engines, and kernels, with more areas to come.
+  A plugin-based framework for evaluating Agent Harness capabilities, inference engine performance, and kernel performance from YAML.
 </p>
 
 <p align="center">
@@ -19,192 +17,76 @@
 </p>
 
 <p align="center">
-  <a href="docs/users/quick-start.md">Quick Start</a> ·
+  <a href="#quick-start">Quick Start</a> ·
+  <a href="#tracer">Tracer</a> ·
   <a href="docs/users/README.md">Documentation</a> ·
-  <a href="playbook/README.md">Playbooks</a> ·
-  <a href="docs/development/plugins.en.md">Plugins</a>
+  <a href="playbook/README.md">Playbooks</a>
 </p>
-
-## ℹ️ Introduction
-
-Ember Evaluator uses YAML to select tasks and components and `--patch` to load custom plugins. Evaluations support custom network settings, automatic network retries, run resumption, and per-task failure diagnostics.
-
-Supported scenarios include evaluating agent harnesses on terminal, coding, and office tasks, benchmarking inference engine performance, and testing kernel correctness and performance.
 
 ![Ember Evaluator flowchart showing agent harness capability, inference serving performance, and kernel performance alongside the eight core components, Cordis plugins, and optional Tracer](imgs/01-flowchart-evaluation-architecture.png)
 
-[Source architecture and execution flow](docs/development/architecture.en.md)
+## What You Can Evaluate
 
-## ⚙️ Features
+| Scenario | What it measures | Start here |
+| --- | --- | --- |
+| Agent Harness | Scores and pass rates on terminal, coding, and office tasks | [Terminal-Bench quick start](docs/users/quick-start/terminalbench.md) |
+| Inference Engine | Time to first token (TTFT) and throughput. Optional metrics include vLLM KV cache usage and Ascend NPU AI Core utilization. | [Inference performance quick start](docs/users/quick-start/agentx.md) |
+| Kernel | Correctness, execution time, and speedup on Ascend NPU | [Kernel evaluation guide](docs/users/benchmarks/kernel-npu.md) |
 
-- **Multiple evaluation workloads.** Give agents terminal, coding, and office tasks with Terminal-Bench, SWE-bench Verified, WorkBuddy, or your own Harbor tasks. OfficeQA Pro V2 accepts parsed JSON and original PDFs. [Supported benchmarks](docs/users/README.md#supported-benchmarks) · [OfficeQA Pro V2](docs/users/benchmarks/officeqa-pro-v2.md)
-- **Local, container, and distributed execution.** Run locally or in Docker with configurable concurrency. Each Ray worker warms up only its assigned tasks. [Execution modes](docs/users/usage.md#local-docker-and-ray) · [Concurrency and warmup](docs/users/concurrency.md)
-- **Evidence and resume.** Per-task results record the failed stage, error codes, traces, and verification logs. Use `--resume` to continue a run and `retry` for eligible network failures. [Resume](docs/users/usage.md#resume-and-rebuild-reports) · [Error diagnostics](docs/users/reference/errors.md) · [Network retries](docs/users/network-retry.md)
-- **Model service performance.** AgentX replays requests to measure throughput, time to first token, and latency, with optional vLLM and Ascend NPU metrics. [AgentX guide](docs/users/benchmarks/agentx.md)
-- **Multiple agents and model services.** Use SimpleAgent, or run DSH, Dify, Pi, DeepAgents, Hermes, or JiuwenSwarm through AgentBundle. [Solvers and model services](docs/users/solvers.md)
-- **Metrics and offline reports.** Use saved results to report scores, accuracy, elapsed time, and token usage. [Read results](docs/users/usage.md#read-results) · [Scoring](docs/users/reference/scoring.md)
-- **Network configuration.** Use `--network` to select settings for your execution environment. [Network configuration](docs/users/network.md)
-- **Plugins.** Use `--patch` to add a benchmark, solver, verifier, or other component. [Plugin development](docs/development/README.en.md#add-your-first-component)
-- **Node.js SDK.** `Evaluator.run()` supports progress, cancellation, resume, and Ray Jobs. [SDK guide](docs/users/sdk.md)
+[Full benchmark list](docs/users/README.md#supported-benchmarks)
 
-## 📦 Installation and Deployment
+## Quick Start
 
-### Agent Instruction
-
-Give this instruction to your coding agent.
-
-```text
-Install the Ember Evaluator CLI and its ember-evaluator skill from https://github.com/evolving-foundry/ember-evaluator.
-Follow the Manual Installation steps in the README to install both. Install the skill for this agent in the target project.
-Run ember-evaluator --help and confirm that this agent can discover and read the skill. Stop after verifying installation.
-```
-
-### Manual Installation
-
-#### 1. Install the CLI
-
-Use Node.js 24.x (at least 24.22.1), pnpm 11 or 12, and Git. If needed, install pnpm with `npm install --global pnpm`.
-
-```bash
-git clone https://github.com/evolving-foundry/ember-evaluator.git
-cd ember-evaluator
-pnpm install --frozen-lockfile
-pnpm build
-pnpm add -g .
-ember-evaluator --help
-```
-
-The help output confirms installation. [Installation guide](docs/users/installation.md) · [Linux management container](docs/users/deployment/container-toolbox.md)
-
-To run the CLI against the TypeScript sources instead of a build, use `pnpm dev`. A fresh checkout needs no manual build: the first command that loads the plugin registry packages the Agent runtime once (`tsc` plus `package-runtime`) before starting.
-
-```bash
-pnpm dev run --tracer http://127.0.0.1:8787 playbook/gsm8k/gsm8k-quick-start.yaml
-```
-
-#### 2. Install the skill
-
-Run this in the target project and select your coding agent.
-
-```bash
-npx skills add evolving-foundry/ember-evaluator --skill ember-evaluator
-```
-
-## 🚀 Quick Start
-
-Run two GSM8K questions locally with SimpleAgent. Replace the settings below with an OpenAI Chat Completions service that supports tool calling, then run the commands in Bash from the repository root.
+[Install the CLI](docs/users/installation.md#install-from-source) to run two GSM8K questions locally with SimpleAgent. Replace the example model ID and URL with those of an OpenAI Chat Completions service that supports tool calling. Run the commands in Bash from the repository root.
 
 ```bash
 export MODEL_NAME="your-model-id"
 export MODEL_ENDPOINT="https://your-model-service.example/v1"
-export MODEL_API_KEY="your-api-key"
+read -rsp 'Model API key: ' MODEL_API_KEY
+printf '\n'
+export MODEL_API_KEY
 
 ember-evaluator inspect playbook/gsm8k/gsm8k-quick-start.yaml
 ember-evaluator run playbook/gsm8k/gsm8k-quick-start.yaml
 ```
 
-Use `inspect` to check the configuration and `run` to start. Open `report.md` in the results directory printed by the CLI. [Full walkthrough and PowerShell commands](docs/users/quick-start.md)
+`inspect` shows the resolved configuration. After `run` finishes, open `report.md` in the results directory printed by the CLI. [Full walkthrough and PowerShell commands](docs/users/quick-start.md)
 
-| Goal | Benchmark / scenario | Environment | Additional requirements | Quick start |
-| --- | --- | --- | --- | --- |
-| Check model execution and reporting | GSM8K, two questions | local | Model API with tool calling | [Two-question quick start](docs/users/quick-start.md) |
-| Evaluate terminal operations | Terminal-Bench 4.0 | Docker | amd64 images; QEMU/binfmt on ARM64 | [Terminal-Bench 4.0](docs/users/quick-start/terminalbench.md) |
-| Standard model service performance evaluation | AgentX standard | local, optionally in the management container | Python 3.11–3.13, venv, tokenizer, streaming model service with long context; management image includes Python | [AgentX performance](docs/users/quick-start/agentx.md) |
+## Tracer
 
-Find more configurations in the [Playbooks](playbook/README.md).
-
-## 🔥 Warm Images Before Evaluation
-
-Use the same YAML to check the environment, warm the images, and run the evaluation. Address any failed `doctor` checks first.
-
-```bash
-ember-evaluator doctor playbook/terminalbench/terminalbench-4.0.yaml
-ember-evaluator warmup playbook/terminalbench/terminalbench-4.0.yaml
-ember-evaluator run playbook/terminalbench/terminalbench-4.0.yaml
-```
-
-`warmup` prepares the selected tasks’ solve, verification, and sidecar images plus runtime dependencies. Model calls and scoring happen during `run`, so warmup can run without a model API key.
-
-Warmup works with local Docker, Ray Client, and Ray Jobs. Ray prepares images on the execution nodes. Keep the experiment and execution environment the same to reuse cached images. [Warmup guide](docs/users/usage.md#warm-images-without-evaluation)
-
-### 📥 Download Evaluation Images from ModelScope
-
-`warmup` and `run` can load ModelScope archives into Docker by task, platform, and phase. Hugging Face archives are also supported. [Official ModelScope image repository](https://www.modelscope.cn/datasets/evolving-foundry/ember-evaluator)
-
-Use `--network` to select the image source.
-
-```bash
-ember-evaluator warmup playbook/terminalbench/terminalbench-4.0.yaml --network playbook/network/archives.yaml
-ember-evaluator run playbook/terminalbench/terminalbench-4.0.yaml --network playbook/network/archives.yaml
-```
-
-The example selects all tasks by default. Archive coverage depends on published tasks and platforms. [Terminal-Bench quick start](docs/users/quick-start/terminalbench.md) · [Configure image sources](docs/users/network.md#1-choose-a-network-file)
-
-## 🛰️ Tracer: Trajectory Visualization, Feedback, and Operations
-
-The bundled `tracer` plugin streams every attempt into a local Collector: a small HTTP service that renders agent trajectories and profiling metrics, produces deterministic feedback with optional LLM attribution, and exports files for downstream RSI tooling. The configured store stays authoritative, and transport failures never block an evaluation.
-
-Enable it for a run; the plugin starts the Collector on demand:
+Use the same configuration to inspect Agent trajectories, performance metrics, and optimization feedback. Tracer starts the local Collector on demand.
 
 ```bash
 ember-evaluator run playbook/gsm8k/gsm8k-quick-start.yaml --tracer
 ```
 
-The plugin ships inside the runtime: `pnpm build` compiles `plugins/tracer` into `dist/plugins/tracer`, so no separate install or interpreter is required. The Collector runs as a Node child process using the bundled `node:sqlite`.
+On the machine running the Collector, enter `http://127.0.0.1:8787` in your browser's address bar.
 
-Manage the Collector with four subcommands:
+![Tracer waterfall view showing the timing of model calls and tool events, with details for a selected call](imgs/tracer-trajectory.png)
 
-| Command | Purpose |
-| --- | --- |
-| `ember-evaluator tracer serve [--url <url>] [--db <path>] [--spool <path>] [--port <n>] [--timeout <ms>]` | Start the Collector, or reuse a healthy one; writes `tracer.pid` next to the database |
-| `ember-evaluator tracer status [--url <url>] [--db <path>] [--port <n>]` | Print JSON status; exits non-zero when the Collector is unhealthy |
-| `ember-evaluator tracer logs [--log <path>] [--lines <n>] [--follow]` | Print the tail of `collector.log`, optionally following new output |
-| `ember-evaluator tracer stop [--url <url>] [--db <path>] [--port <n>]` | Stop the process recorded in `tracer.pid` (SIGTERM, escalating to SIGKILL after 5 seconds) |
+[Tracer setup and troubleshooting](docs/users/tracer.md)
 
-`--url`, `--db`, and `--spool` are accepted by every subcommand; `--port` applies to all but `logs`.
+## Extend with Plugins
 
-Defaults are `http://127.0.0.1:8787`, `.cache/tracer/trace.db`, `.cache/tracer/spool`, and `.cache/tracer/collector.log`. Override them with `TRACER_URL`, `TRACER_DB`, `TRACER_SPOOL`, `TRACER_LOG`, `TRACER_COLLECTOR`, or `TRACER_TOKEN`. Set `TRACER_DB` to an older `plugins/tracer/trace.db` to keep existing history. The Collector is a child process and inherits environment variables when it starts; after changing them run `ember-evaluator tracer stop` and then `ember-evaluator tracer serve` again.
+Select components in YAML and load custom components with `--patch`. [Add a Solver](docs/development/add-solver.en.md) · [Add a built-in component role](docs/development/add-built-in-plugin.en.md) · [Add an external plugin](docs/development/add-external-plugin.en.md) · [Source architecture](docs/development/architecture.en.md)
 
-LLM analysis is optional; without a provider the Collector runs rules-only and the feedback page marks the LLM section as unconfigured. Enable it with an OpenAI-compatible `/chat/completions` service:
+## Evaluation Results
 
-```bash
-export TRACER_LLM_BASE_URL="https://your-model-service.example/v1"
-export TRACER_LLM_MODEL="your-model-id"
-export TRACER_LLM_API_KEY="your-api-key"
-ember-evaluator tracer serve
-```
-
-`TRACER_LLM_BASE_URL`, `TRACER_LLM_MODEL`, and `TRACER_LLM_API_KEY` fall back to `MODEL_ENDPOINT`, `MODEL_NAME`, and `MODEL_API_KEY`. `TRACER_LLM_TIMEOUT` defaults to 120 seconds and `TRACER_LLM_MAX_TOKENS` to 8000, which reasoning models need. The Collector reads these variables when it starts, so set them before `ember-evaluator tracer serve` or restart it afterwards.
-
-## 📖 Guides
-
-- **Configure experiments** · [YAML and profiles](docs/users/config.md) · [Solvers and model services](docs/users/solvers.md)
-- **Run workloads** · [Benchmark guides](docs/users/benchmarks/README.md) · [Runnable configurations](playbook/README.md)
-- **Manage evaluation runs** · [Task selection, resume, and reports](docs/users/usage.md) · [Concurrency](docs/users/concurrency.md) · [Image cleanup](docs/users/usage.md#delete-evaluation-images)
-- **Measure service performance** · [AgentX concurrency sweeps and trace replay](docs/users/benchmarks/agentx.md)
-- **Extend the project** · [Add a Solver](docs/development/add-solver.en.md) · [Add a built-in component role](docs/development/add-built-in-plugin.en.md) · [Add an external plugin](docs/development/add-external-plugin.en.md) · [Benchmark development](docs/development/benchmarks.en.md) · [Dataset acceptance](docs/development/benchmark-evaluation-requirements.en.md)
-- **Troubleshoot** · [FAQ](docs/users/faq/README.md) · [Error codes](docs/users/reference/errors.md) · [Network retries](docs/users/network-retry.md)
-
-## 🧪 Supported Benchmarks
-
-| Category | Supported benchmarks | What is measured and where to start |
-| --- | --- | --- |
-| Model + agent harness capability evaluation | GSM8K, MATH-500, MGSM, MMLU, MMLU-Pro, GPQA, DROP, TriviaQA, SimpleQA, HealthBench, HumanEval, DeepSWE, SWE-bench Verified, Terminal-Bench, WorkBuddy, OfficeQA Pro V2, and custom Harbor task packages | Score questions, code, terminal, office, web, and security tasks under each benchmark’s rules. [Benchmarks and requirements](docs/users/README.md#supported-benchmarks) |
-| Inference engine performance evaluation (AgentX) | AgentX (`agentx`) | Replay agent requests and measure throughput, time to first token, inter-token latency, and request latency. [AgentX guide](docs/users/benchmarks/agentx.md) |
-| Operator performance evaluation (kernel) | kernel (`kernel`) | Verify candidates serially on a local Ascend NPU, compare runtime and speedup, and optionally collect hardware metrics. [Kernel guide](docs/users/benchmarks/kernel-npu.md) · [Example configuration](playbook/kernel/existing.yaml) |
-
-## 📊 Evaluation Results
-
-These runs used **DeepSeek V4.1 Flash 1017**. `tbd` marks a pending evaluation. Scores follow each benchmark’s rules.
+These runs used **DeepSeek V4.1 Flash 1017**. Scores follow each benchmark’s rules.
 
 | Benchmark | Agent Harness | Result |
 | --- | --- | --- |
 | GSM8K | SimpleAgent | 92.34% (1,218 / 1,319) |
 | MMLU | choice-logprobs | 88.83% (12,474 / 14,042) |
 | WorkBuddy | SimpleAgent | Office 0.8502 · Code 0.9009 · Web 0.7957 |
-| Terminal-Bench 4.0 | SimpleAgent | `tbd` |
-| SWE-bench Verified | SimpleAgent | `tbd` |
 | OfficeQA Pro V2 | SimpleAgent | 56.67% (51 / 90) |
+
+## Documentation
+
+- [User guide](docs/users/README.md) · [Playbooks](playbook/README.md) · [Node.js SDK](docs/users/sdk.md)
+- [CLI commands](docs/users/reference/cli.md) · [Experiment YAML fields](docs/users/reference/experiment-yaml.md) · [Solvers and model services](docs/users/solvers.md)
+- [Installation and agent skill](docs/users/installation.md) · [Local, Docker, and Ray](docs/users/usage.md#local-docker-and-ray) · [Image warmup](docs/users/usage.md#warm-images-without-evaluation) · [ModelScope downloads](docs/users/image-downloads.md#download-task-images-from-modelscope)
+- [Resume and rebuild reports](docs/users/usage.md#resume-and-rebuild-reports) · [Network retries](docs/users/network-retry.md) · [FAQ](docs/users/faq/README.md)
 
 ## 🙏 Acknowledgments
 

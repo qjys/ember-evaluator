@@ -51,7 +51,7 @@ ember-evaluator run playbook/gsm8k/gsm8k-quick-start.yaml --tracer
 ember-evaluator tracer status
 ```
 
-Use `ember-evaluator tracer serve` to start the Collector independently. Open `http://127.0.0.1:8787` to view the captured evidence. [Tracer configuration](../../../README.md#-tracer-trajectory-visualization-feedback-and-operations)
+Use `ember-evaluator tracer serve` to start the Collector independently. Open `http://127.0.0.1:8787` to view the captured evidence. [Tracer configuration](../tracer.md#collector-configuration)
 
 | Full command | What it does | Optional flags |
 | --- | --- | --- |

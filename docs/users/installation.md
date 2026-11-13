@@ -6,11 +6,13 @@
 
 ## Install from Source
 
-Prepare the Evaluator repository, Node.js **24.22.1 or later 24.x**, pnpm **11 or 12**, and Git.
+Prepare Node.js **24.22.1 or later 24.x**, pnpm **11 or 12**, and Git.
 
-If pnpm is missing, run `npm install --global pnpm`. Then run these commands from the **Evaluator repository root**:
+If pnpm is missing, run `npm install --global pnpm`. Clone the repository and install the CLI:
 
 ```bash
+git clone https://github.com/evolving-foundry/ember-evaluator.git
+cd ember-evaluator
 pnpm install --frozen-lockfile
 pnpm add -g .
 ember-evaluator --help
@@ -31,6 +33,32 @@ pnpm setup
 ```
 
 Reopen the terminal as instructed, return to the Evaluator repository, and retry `pnpm add -g .` and `ember-evaluator --help`.
+
+## Install the Agent Skill
+
+In the project where you use your coding agent, run the following and select that agent:
+
+```bash
+npx skills add evolving-foundry/ember-evaluator --skill ember-evaluator
+```
+
+To have a coding agent install both the CLI and the skill, give it this instruction:
+
+```text
+Install the Ember Evaluator CLI and its ember-evaluator skill from https://github.com/evolving-foundry/ember-evaluator.
+Follow docs/users/installation.md to install the CLI and add the skill to the target project for this agent.
+Run ember-evaluator --help and confirm that this agent can discover and read the skill. Stop after verifying installation.
+```
+
+## Run the CLI from TypeScript Sources
+
+From the repository root, use `pnpm dev` to run CLI commands against the TypeScript sources. On a fresh checkout with dependencies installed, the first command that needs the plugin registry builds the runtime assets and plugin bundles automatically.
+
+```bash
+pnpm dev run playbook/gsm8k/gsm8k-quick-start.yaml --tracer
+```
+
+Set the model variables first as described in the [Tracer guide](tracer.md#view-an-evaluation).
 
 ## Run from Any Directory
 

@@ -51,7 +51,7 @@ ember-evaluator run playbook/gsm8k/gsm8k-quick-start.yaml --tracer
 ember-evaluator tracer status
 ```
 
-需要单独启动 Collector 时，执行 `ember-evaluator tracer serve`。在浏览器打开 `http://127.0.0.1:8787` 查看采集结果。[Tracer 配置](../../../README.zh-CN.md#-tracer轨迹展示优化反馈与运维)
+需要单独启动 Collector 时，执行 `ember-evaluator tracer serve`。在浏览器打开 `http://127.0.0.1:8787` 查看采集结果。[Tracer 配置](../tracer.zh-CN.md#collector-配置)
 
 | 完整命令 | 用途 | 可选参数 |
 | --- | --- | --- |
