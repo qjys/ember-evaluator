@@ -1,0 +1,55 @@
+import { join } from "node:path";
+import { expectNonEmptyString, expectPositiveInteger, expectRecord, rejectUnknown } from "../../../core/validation/input.js";
+
+export const northStarLengths = [128, 512, 1024, 5120, 10240] as const;
+export type Workload = { beamWidth: number; decodeSteps: number; concurrency: number; requests: number; warmup: number };
+export type RecommendationConfig = Workload & {
+  scenario: "north-star" | "custom";
+  tag: "base" | "fast";
+  inputs: { length: number; file: string }[];
+  prefix1File: string;
+  prefix2File: string;
+  comparison?: { session: string; machine: string; devices: string; modelRevision: string; tokenizerRevision: string };
+};
+
+export function parseRecommendationConfig(value: unknown): RecommendationConfig {
+  const v = expectRecord(value, "recommendation");
+  rejectUnknown(v, ["scenario", "tag", "promptDir", "inputs", "prefix1File", "prefix2File", "beamWidth", "decodeSteps", "concurrency", "requests", "warmup", "comparison"], "recommendation");
+  const scenario = v.scenario ?? "north-star";
+  const tag = v.tag ?? "base";
+  if (scenario !== "north-star" && scenario !== "custom") throw new TypeError("Unknown recommendation scenario");
+  if (tag !== "base" && tag !== "fast") throw new TypeError("recommendation.tag must be base or fast");
+  const workload = {
+    beamWidth: expectPositiveInteger(v.beamWidth ?? 128, "beamWidth"),
+    decodeSteps: expectPositiveInteger(v.decodeSteps ?? 3, "decodeSteps"),
+    concurrency: expectPositiveInteger(v.concurrency ?? 1, "concurrency"),
+    requests: expectPositiveInteger(v.requests ?? 8, "requests"),
+    warmup: v.warmup === 0 ? 0 : expectPositiveInteger(v.warmup ?? 2, "warmup"),
+  };
+  if (workload.decodeSteps > 3) throw new TypeError("Two prefix catalogs support one to three SID components");
+  let inputs: RecommendationConfig["inputs"];
+  if (scenario === "north-star") {
+    if (v.inputs !== undefined || workload.beamWidth !== 128 || workload.decodeSteps !== 3 || workload.concurrency !== 1 ||
+      workload.requests !== 8 || workload.warmup !== 2) throw new TypeError("Use scenario custom to change north-star inputs or workload");
+    const dir = expectNonEmptyString(v.promptDir, "promptDir");
+    inputs = northStarLengths.map(length => ({ length, file: join(dir, `prompts_${length}_batch_4.json`) }));
+  } else {
+    if (v.promptDir !== undefined || !Array.isArray(v.inputs) || !v.inputs.length) throw new TypeError("custom requires an inputs array of length/file pairs");
+    inputs = v.inputs.map(entry => {
+      const item = expectRecord(entry, "inputs[]");
+      rejectUnknown(item, ["length", "file"], "inputs[]");
+      return { length: expectPositiveInteger(item.length, "inputs[].length"), file: expectNonEmptyString(item.file, "inputs[].file") };
+    });
+    if (new Set(inputs.map(input => input.length)).size !== inputs.length) throw new TypeError("Duplicate recommendation length");
+  }
+  let comparison: RecommendationConfig["comparison"];
+  if (v.comparison !== undefined) {
+    const identity = expectRecord(v.comparison, "comparison");
+    rejectUnknown(identity, ["session", "machine", "devices", "modelRevision", "tokenizerRevision"], "comparison");
+    comparison = { session: expectNonEmptyString(identity.session, "comparison.session"), machine: expectNonEmptyString(identity.machine, "comparison.machine"),
+      devices: expectNonEmptyString(identity.devices, "comparison.devices"), modelRevision: expectNonEmptyString(identity.modelRevision, "comparison.modelRevision"),
+      tokenizerRevision: expectNonEmptyString(identity.tokenizerRevision, "comparison.tokenizerRevision") };
+  }
+  return { scenario, tag, inputs, ...workload, ...(comparison && { comparison }), prefix1File: expectNonEmptyString(v.prefix1File, "prefix1File"),
+    prefix2File: expectNonEmptyString(v.prefix2File, "prefix2File") };
+}

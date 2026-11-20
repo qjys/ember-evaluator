@@ -8,6 +8,7 @@
 
 | 场景 | 指南 | 入门 / 配置 |
 | --- | --- | --- |
+| 推荐服务时延 | [SGLang-GR](recommendation.zh-CN.md) | [五档北极星](../../../playbook/recommendation/north-star.yaml)、[自定义负载](../../../playbook/recommendation/custom.yaml) |
 | 数学、知识和记录型问答 | [通用两题入门](../quick-start.zh-CN.md)、[评分口径](../reference/scoring.zh-CN.md) | [全部 Playbook](../../../playbook/README.md) |
 | 自有 Harbor 任务包 | [来源、镜像、网络与验证](harbor.zh-CN.md) | [自定义来源配置](harbor.zh-CN.md#一个新数据集只增加-yaml) |
 | Office、Code、Web、Security | [WorkBuddy](workbuddy.zh-CN.md) | [场景配置](../../../playbook/workbuddy/) |

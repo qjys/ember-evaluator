@@ -6,6 +6,7 @@ import { expectRecord, rejectUnknown } from "../../core/validation/input.js";
 import { bindSolverService } from "../../core/contracts/plugin.js";
 import { AgentXReplaySolver, parseAgentXReplayConfig } from "./agentx-replay.js";
 import { KernelReplaySolver } from "./kernel-replay.js";
+import { SglangGrSolver, parseSglangGrConfig } from "./sglang-gr.js";
 import { CodexSolver, parseCodexConfig } from "./codex.js";
 import { ClaudeCodeSolver, parseClaudeCodeConfig } from "./claudecode.js";
 import { ZCodeSolver, parseZCodeConfig } from "./zcode.js";
@@ -33,6 +34,8 @@ export function apply(ctx: Context): void {
     return {};
   }, () => new KernelReplaySolver());
   ctx.evaluator.register("solver", "agentx-replay", parseAgentXReplayConfig, (config, runtime) => new AgentXReplaySolver(config, runtime));
+  ctx.evaluator.register("solver", "sglang-gr", parseSglangGrConfig, (config, runtime) =>
+    new SglangGrSolver({ ...config, tokenizerPath: config.tokenizerPath === null ? null : runtime.resolvePath(config.tokenizerPath) }, bindSolverService(runtime)));
   ctx.evaluator.register(
     "solver",
     "agentbundle",

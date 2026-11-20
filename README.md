@@ -27,7 +27,7 @@
 
 ## ℹ️ Introduction
 
-**ARSI-Evaluator** is a unified, plugin-based framework for **agent harness capability evaluation, inference engine performance evaluation, and kernel performance evaluation**. It can be extended to support more evaluation scenarios.
+**ARSI-Evaluator** is a unified, plugin-based framework for **agent harness capability evaluation, inference engine performance, recommendation service performance, and kernel performance evaluation**. It can be extended to support more evaluation scenarios.
 
 The framework uses YAML configuration and composable components to define evaluation workflows. It supports local, containerized, and distributed execution, records results, helps diagnose failures, and lets you resume interrupted runs.
 
@@ -46,13 +46,14 @@ The framework uses YAML configuration and composable components to define evalua
 
 ## 🧪 Supported Benchmarks
 
-ARSI-Evaluator covers three types of evaluation. See the [benchmark list](docs/users/README.md#supported-benchmarks) for the full list and run requirements.
+ARSI-Evaluator covers four types of evaluation. See the [benchmark list](docs/users/README.md#supported-benchmarks) for the full list and run requirements.
 
 | Evaluation area | Representative benchmarks | What it evaluates |
 | --- | --- | --- |
 | Model and agent capabilities | GSM8K, MMLU, SWE-bench, Terminal-Bench, WorkBuddy, OfficeQA, and others | Evaluate question answering, coding, terminal, office, and web tasks. Custom Harbor tasks are also supported. |
 | Inference engine performance | AgentX, AISBench | Replay agent request traces and load-test model services to measure throughput, latency, and prefix cache metrics. [AgentX guide](docs/users/benchmarks/agentx.md) · [AISBench guide (Chinese)](plugins/aisbench/README.md) |
 | Kernel performance | kernel | Verify kernel correctness and measure execution time and speedup. [Kernel evaluation guide](docs/users/benchmarks/kernel-npu.md) |
+| Recommendation service performance | recommendation, SGLang-GR | Measure constrained beam-search request latency, server stage durations and shared-prefix fast-path hits. [Recommendation guide](docs/users/benchmarks/recommendation.md) |
 
 ## 📦 Installation
 

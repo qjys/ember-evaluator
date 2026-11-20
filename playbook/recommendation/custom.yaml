@@ -1,0 +1,25 @@
+hardware: npu
+services:
+  default:
+    model: Qwen3-0.6B-OneRecVocab
+    base_url: http://127.0.0.1:30000
+    api_key: ${MODEL_API_KEY}
+benchmark:
+  name: recommendation
+  scenario: custom
+  solver:
+    config:
+      tokenizerPath: ${GR_TOKENIZER_DIR}
+      lengthToleranceTokens: 8
+  config:
+    tag: base
+    inputs:
+      - length: 128
+        file: ${GR_PROMPT_FILE}
+    prefix1File: ${GR_PREFIX1_FILE}
+    prefix2File: ${GR_PREFIX2_FILE}
+    beamWidth: 128
+    decodeSteps: 3
+    concurrency: 1
+    requests: 8
+    warmup: 2

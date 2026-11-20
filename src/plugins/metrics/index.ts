@@ -7,6 +7,7 @@ import { HarborScoreMetrics, parseHarborScoreConfig } from "./harbor-score.js";
 import { AgentXPerformanceMetrics } from "./agentx-performance.js";
 import { QualityScoreMetrics } from "./quality-score.js";
 import { KernelMetrics } from "./kernel.js";
+import { RecommendationPerformanceMetrics, parseRecommendationMetrics } from "./recommendation-performance.js";
 
 export const inject = ["evaluator"];
 export function apply(ctx: Context): void {
@@ -22,4 +23,5 @@ export function apply(ctx: Context): void {
   ctx.evaluator.register("metrics", "agentx-performance", empty, () => new AgentXPerformanceMetrics());
   ctx.evaluator.register("metrics", "quality-score", empty, () => new QualityScoreMetrics());
   ctx.evaluator.register("metrics", "kernel", empty, () => new KernelMetrics());
+  ctx.evaluator.register("metrics", "recommendation-performance", parseRecommendationMetrics, config => new RecommendationPerformanceMetrics(config));
 }

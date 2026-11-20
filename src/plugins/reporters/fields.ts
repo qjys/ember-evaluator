@@ -102,7 +102,7 @@ export function renderMetrics(metrics: MetricResults): string[] {
     lines.push("");
   }
 
-  const builtins = new Set(["success-rate", "harbor-score", "quality-score", "duration", "usage", "attempt-accounting", "agentx-performance", "kernel"]);
+  const builtins = new Set(["success-rate", "harbor-score", "quality-score", "duration", "usage", "attempt-accounting", "agentx-performance", "recommendation-performance", "kernel"]);
   const extraRows: string[] = [];
   const extra = (name: string, value: JsonValue) => {
     if (value !== null && typeof value === "object" && Object.keys(value).length) {

@@ -95,7 +95,7 @@ Docker 读取构建目录中的文件和权限来计算镜像缓存键。缓存�
 
 ## Benchmark 与插件注册
 
-Benchmark 分为 `agent-harness/`、`inference-engine/`、`operator/`，各自保存所属 Profile 并在本类 `index.ts` 注册。分类不增加 YAML 类别字段，也不在核心执行流程中按类别分支。具体新增位置见 [Benchmark 开发指南](benchmarks.md#新需求的修改入口)。
+Benchmark 分为 `agent-harness/`、`inference-engine/`、`operator/`、`recommendation/`，各自保存所属 Profile 并在本类 `index.ts` 注册。分类不增加 YAML 类别字段，也不在核心执行流程中按类别分支。具体新增位置见 [Benchmark 开发指南](benchmarks.md#新需求的修改入口)。
 
 [plugins/index.ts](../../src/plugins/index.ts) 组合注册入口。Benchmark、Solver、Environment、Verifier、Store、Scheduler 使用各自入口；Metrics 和 Reporter 分别由 [metrics/index.ts](../../src/plugins/metrics/index.ts) 和 [reporters/index.ts](../../src/plugins/reporters/index.ts) 注册。外部插件通过显式 `--patch` 加载，省略参数不扫描默认目录，配置方法见[插件开发与加载](plugins.md)。
 

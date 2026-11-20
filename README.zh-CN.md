@@ -27,7 +27,7 @@
 
 ## ℹ️ 简介
 
-**ARSI-Evaluator** 是一个插件化的统一评测框架，支持 **Agent Harness 能力评测、推理引擎性能评测和算子性能评测**，并可扩展至更多评测场景。
+**ARSI-Evaluator** 是一个插件化的统一评测框架，支持 **Agent Harness 能力评测、推理引擎性能评测、推荐服务性能评测和算子性能评测**，并可扩展至更多评测场景。
 
 框架通过 YAML 配置和可组合的评测组件组织评测流程，支持本地、容器及分布式执行，提供结果记录、故障诊断与断点续跑等能力。
 
@@ -46,13 +46,14 @@
 
 ## 🧪 支持的 Benchmark
 
-ARSI-Evaluator 覆盖以下三类评测场景，完整支持列表及运行条件参见 [Benchmark 列表](docs/users/README.zh-CN.md#现在能测哪些-benchmark)。
+ARSI-Evaluator 覆盖以下四类评测场景，完整支持列表及运行条件参见 [Benchmark 列表](docs/users/README.zh-CN.md#现在能测哪些-benchmark)。
 
 | 评测方向 | 代表性 Benchmark | 评测内容 |
 | --- | --- | --- |
 | 模型与 Agent 能力评测 | GSM8K、MMLU、SWE-bench、Terminal-Bench、WorkBuddy、OfficeQA 等 | 覆盖问答、编程、终端、办公及网页等任务，支持自定义 Harbor 任务。 |
 | 推理引擎性能评测 | AgentX、AISBench | 支持 Agent 请求轨迹回放与模型服务压测，测量吞吐量、延迟及 Prefix Cache 等性能指标。 [AgentX 指南](docs/users/benchmarks/agentx.zh-CN.md) · [AISBench 指南](plugins/aisbench/README.md) |
 | 算子性能评测 | kernel | 验证算子正确性，测量执行耗时与加速比。 [算子评测指南](docs/users/benchmarks/kernel-npu.zh-CN.md) |
+| 推荐服务性能评测 | recommendation、SGLang-GR | 测量约束 beam search 的完整请求时延、服务端阶段耗时与共享前缀快路命中。 [推荐测评指南](docs/users/benchmarks/recommendation.zh-CN.md) |
 
 ## 📦 安装部署
 

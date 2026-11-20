@@ -8,6 +8,7 @@ Choose a task guide, then an executable YAML. Profiles and source locks determin
 
 | Scenario | Guide | Quick start / configuration |
 | --- | --- | --- |
+| Recommendation service latency | [SGLang-GR](recommendation.md) | [North Star](../../../playbook/recommendation/north-star.yaml), [custom workload](../../../playbook/recommendation/custom.yaml) |
 | Math, knowledge, and record-based QA | [Two-question quick start](../quick-start.md), [scoring](../reference/scoring.md) | [All Playbooks](../../../playbook/README.md) |
 | Custom Harbor task packages | [Sources, images, networking, and verification](harbor.md) | [Custom source configuration](harbor.md#add-a-dataset-with-yaml-only) |
 | Office, Code, Web, Security | [WorkBuddy](workbuddy.md) | [Scenario configurations](../../../playbook/workbuddy/) |

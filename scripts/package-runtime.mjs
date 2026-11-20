@@ -122,7 +122,7 @@ for (const name of ["precision.py", "timing.py", "msprof_replay.py", "strict.py"
   await cp(new URL(`../src/plugins/benchmarks/operator/kernel/runtime/${name}`, import.meta.url), new URL(name, kernelKernelAssets));
   await normalizeRuntimeFile(new URL(name, kernelKernelAssets));
 }
-for (const category of ["agent-harness", "inference-engine", "operator"]) {
+for (const category of ["agent-harness", "inference-engine", "operator", "recommendation"]) {
   await cp(new URL(`../src/plugins/benchmarks/${category}/profiles/`, import.meta.url), new URL(`plugins/benchmarks/${category}/profiles/`, distribution), { recursive: true });
 }
 // Keep the checkout entrypoint stable so it can refresh stale compiled code.
@@ -131,7 +131,7 @@ await writeFile(new URL("cli.js", distribution), await readFile(new URL("./cli-b
 await writeFile(new URL("source-provenance.json", distribution),
   JSON.stringify({ schemaVersion: 1, digest: await sourceFingerprint() }, null, 2) + "\n");
 // Fixed standalone upstream CLI and locked harness recipes travel with npm packs.
-for (const directory of ["dsh", "deepagents", "dify", "jiuwenswarm", "hermes", "agentx", "codex", "claudecode", "zcode", "trae", "codebuddy", "qwencode", "kimicode", "minimaxcode", "opencode", "shared"]) {
+for (const directory of ["dsh", "deepagents", "dify", "jiuwenswarm", "hermes", "agentx", "sglang-gr", "codex", "claudecode", "zcode", "trae", "codebuddy", "qwencode", "kimicode", "minimaxcode", "opencode", "shared"]) {
   const target = new URL(`../dist/runtimes/${directory}/assets/`, import.meta.url);
   await mkdir(target, { recursive: true });
   await cp(new URL(`../src/runtimes/${directory}/assets/`, import.meta.url), target, { recursive: true, filter: isRuntimeAsset });

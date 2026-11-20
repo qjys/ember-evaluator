@@ -1,0 +1,34 @@
+id: recommendation
+role: benchmark
+defaultVersion: "1.0"
+defaultScenario: north-star
+versions:
+  "1.0": {}
+plugin:
+  name: recommendation
+defaults:
+  benchmark:
+    solver: sglang-gr
+  environment: local
+  scheduler:
+    name: local
+    concurrency: 1
+  metrics: [recommendation-performance, duration]
+  reporter: markdown
+  run:
+    timeoutSeconds: 1800
+    preparation:
+      mode: batch
+      concurrency: 1
+    onError: continue
+scenarios:
+  north-star:
+    plugin:
+      name: recommendation
+      config:
+        scenario: north-star
+  custom:
+    plugin:
+      name: recommendation
+      config:
+        scenario: custom

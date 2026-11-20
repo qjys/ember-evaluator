@@ -95,7 +95,7 @@ When `taskImage()` builds a local task snapshot, it starts a [package relay](../
 
 ## Benchmarks and Plugin Registration
 
-Benchmarks use `agent-harness/`, `inference-engine/`, and `operator/`, each with its own Profiles and registration `index.ts`. These categories add no YAML category field and no category branches to core execution. See [where to add behavior](benchmarks.en.md#where-to-add-new-behavior).
+Benchmarks use `agent-harness/`, `inference-engine/`, `operator/`, and `recommendation/`, each with its own Profiles and registration `index.ts`. These categories add no YAML category field and no category branches to core execution. See [where to add behavior](benchmarks.en.md#where-to-add-new-behavior).
 
 [plugins/index.ts](../../src/plugins/index.ts) composes registration entries. Benchmark, Solver, Environment, Verifier, Store, and Scheduler have their own entries; Metrics and Reporter use [metrics/index.ts](../../src/plugins/metrics/index.ts) and [reporters/index.ts](../../src/plugins/reporters/index.ts) respectively. External plugins use explicit `--patch` loading; omitting it does not scan a default directory. See [plugin development](plugins.en.md).
 
