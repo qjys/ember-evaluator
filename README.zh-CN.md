@@ -20,6 +20,7 @@
 
 <p align="center">
   <a href="docs/users/quick-start.zh-CN.md">快速开始</a> ·
+  <a href="#officeqa-pro-v2">OfficeQA 评测图表</a> ·
   <a href="docs/users/README.zh-CN.md">使用文档</a> ·
   <a href="playbook/README.md">实验配置</a> ·
   <a href="docs/development/plugins.md">插件开发</a>
@@ -140,16 +141,41 @@ Tracer 会按需启动本地 Collector。在运行 Collector 的机器上，通�
 
 ## 📊 评测结果
 
-模型为 **DeepSeek V4.1 Flash 1017**。`tbd` 表示待测。分数按各题库自己的规则计算。
+### 同一 Benchmark，不同模型
 
-| Benchmark | Agent Harness | 结果 |
-| --- | --- | --- |
-| GSM8K | SimpleAgent | 92.34% (1,218 / 1,319) |
-| MMLU | choice-logprobs | 88.83% (12,474 / 14,042) |
-| WorkBuddy | SimpleAgent | Office 0.8502 · Code 0.9009 · Web 0.7957 |
-| Terminal-Bench 4.0 | SimpleAgent | `tbd` |
-| SWE-bench Verified | SimpleAgent | `tbd` |
-| OfficeQA Pro V2 | SimpleAgent | 56.67% (51 / 90) |
+#### OfficeQA Pro V2
+
+两种模型各搭配九种 Solver，评测 OfficeQA Pro V2 的同一组 90 道题。GLM 使用 `low` 推理强度。
+
+| Solver | [`deepseek-v4.1-flash-1017`](docs/experiment/officeqa-pro-v2/deepseek-v4.1-flash-1017/report.md) | [`glm-5.3-flash`](docs/experiment/officeqa-pro-v2/glm-5.3-flash/report.md) |
+| --- | ---: | ---: |
+| DeepSeek Harness | 64.44% (58/90) | 42.22% (38/90) |
+| Codex | 61.11% (55/90) | 43.33% (39/90) |
+| Pi | 60.00% (54/90) | 38.89% (35/90) |
+| Claude Code | 58.89% (53/90) | 26.67% (24/90) |
+| ZCode | 58.89% (53/90) | 47.78% (43/90) |
+| TRAE | 58.89% (53/90) | 38.89% (35/90) |
+| SimpleAgent | 56.67% (51/90) | 40.00% (36/90) |
+| JiuwenSwarm | 55.56% (50/90) | 45.56% (41/90) |
+| CodeBuddy | 53.33% (48/90) | 27.78% (25/90) |
+
+### 同一模型，不同 Solver
+
+下图比较 `deepseek-v4.1-flash-1017` 在 OfficeQA Pro V2 上搭配九种 Solver 的表现。
+
+![九种 Solver 在 OfficeQA Pro V2 上的准确率，范围为 53.33% 至 64.44%](docs/experiment/officeqa-pro-v2/deepseek-v4.1-flash-1017/accuracy.png)
+
+**准确率**　DeepSeek Harness 答对 58/90 题（64.44%），在九种 Solver 中最高。
+
+![九种 Solver 在 OfficeQA Pro V2 上的求解耗时中位数、第 90 百分位和各自纳入统计的题数](docs/experiment/officeqa-pro-v2/deepseek-v4.1-flash-1017/solve-time.png)
+
+**求解耗时**　JiuwenSwarm 的求解耗时中位数最低，为 2 分 57 秒。
+
+![九种 Solver 在 OfficeQA Pro V2 上每题上报的 Token 用量中位数、第 90 百分位和上报题数](docs/experiment/officeqa-pro-v2/deepseek-v4.1-flash-1017/token-usage.png)
+
+**上报 Token 用量**　JiuwenSwarm 的每题上报 Token 中位数最低，为 146 万。
+
+[全部实验结果](docs/experiment/README.md)
 
 ## 📖 使用指南
 
