@@ -91,7 +91,8 @@ export class RecommendationPerformanceMetrics implements Metrics {
       l128: !comparableRun ? "invalid" : passedLengths.includes(128) ? "pass" : "fail",
       overall: !comparableRun ? "invalid" : passedLengths.length === northStarLengths.length ? "pass" : "fail",
       passedLengths } : null;
-    return { applicable: true, northStar, scenario: String(meta.scenario), tag: String(meta.tag), complete, fast,
+    return { applicable: true, dataMode: meta.generatedManifestSha256 ? "generated" : "files", sourceRevision: source.revision,
+      generatedManifestSha256: meta.generatedManifestSha256 ?? null, northStar, scenario: String(meta.scenario), tag: String(meta.tag), complete, fast,
       l128: comparableRun && delta != null ? delta <= 0 ? "pass" : "fail" : "unassessed", points };
   }
 }

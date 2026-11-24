@@ -2,6 +2,21 @@
 
 [English](recommendation.md) · [五档实验](../../../playbook/recommendation/north-star.yaml) · [自定义实验](../../../playbook/recommendation/custom.yaml)
 
+## 选择数据来源
+
+`benchmark.config.dataMode` 默认是 `files`。已有的 north-star 用 `promptDir` 读取五档文件，custom 用 `inputs` 指定每档的 JSON 字符串数组。使用 `generated` 时，填写词表和两级 catalog 路径，省略 `inputs`、`promptDir`。两种模式均在来源准备阶段检查全部输入；配置 tokenizer 时也校验实际 token 长度。此阶段和 dry-run 都只读本地模型文件，不访问推理服务。
+
+```bash
+arsi-evaluator run playbook/recommendation/generated.yaml --dry-run
+arsi-evaluator run playbook/recommendation/generated.yaml
+```
+
+[生成模式示例](../../../playbook/recommendation/generated.yaml)使用自定义长度，每档生成 100 条并正式请求 100 次。生成器从 catalog 的合法 A/B/C 路径抽取完整商品 SID，构造观看和购物历史，按整条 prompt 的真实编码和 `lengthToleranceTokens` 匹配目标长度。可调 `generator.seed`（默认 42）、`generator.lengths` 和 `generator.samplesPerLength`（默认 4）。正式请求从第一个样本开始循环，预热独立计数。标准 north-star 可以只设置 `dataMode: generated`，自动生成五档各四条；需提供 `benchmark.solver.config.tokenizerPath`，建议沿用标准示例的 8 token 容差。
+
+生成模式不需要 `GR_PROMPT_DIR`。每次抽样先在有合法后继的 `(A,B)` 前缀中等概率选一组，再从该组抽一个 C。小目录可能产生重复历史，清单中的 `samples` 和 `uniquePrompts` 分别记录生成总数和去重数。
+
+数据写入 **实验的 output.directory 下的 `datasets/<清单SHA-256>/`**，与 run 目录并列。数据文件名为 `prompts_<长度>_batch_<样本数>.json`，`dataset.json` 记录种子、版本、词表和 catalog 的摘要、每条实际长度及数据摘要。E2E 和 profiling 共享这些文件。相同输入、生成器与 tokenizer 环境可生成相同字节。已有同摘要目录会在核对内容后复用。原始结果的 report.md 有清单链接；归档时请同时保留 datasets 目录。如需严格重放，把清单列出的文件路径填入 files/custom 的 `inputs`，或把五档各 4 条的目录用作 files/north-star 的 `promptDir`。
+
 在运行 SGLang-GR 的 NPU 机器上启动 Evaluator。服务地址填写根 URL，例如 `http://127.0.0.1:30000`。实验期间独占该服务，预热后会重置服务端 GR 计数器。模型和词表由服务加载。
 
 ```bash

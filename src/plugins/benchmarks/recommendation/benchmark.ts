@@ -1,5 +1,7 @@
-import { createHash } from "node:crypto";
-import { createReadStream } from "node:fs";
+import { join } from "node:path";
+import { expectNonEmptyString, expectPositiveInteger, expectRecord } from "../../../core/validation/input.js";
+import { prepareDataset, type DatasetRuntime } from "./dataset.js";
+import type { ActivityListener } from "../../../core/contracts/activity.js";
 import type { Benchmark } from "../../../core/contracts/benchmark.js";
 import type { EffectiveConfig } from "../../../core/contracts/config.js";
 import type { ResultSnapshot, SolveResult, VerifyResult } from "../../../core/contracts/result.js";
@@ -15,7 +17,16 @@ export class RecommendationBenchmark implements Benchmark {
   readonly validateSourceOnCompletedResume = true;
   constructor(private readonly config: RecommendationConfig, private readonly resolvePath: (path: string) => string) {}
 
+  private dataset: DatasetRuntime = { python: process.platform === "win32" ? "python" : "python3", tokenizerPath: null, tolerance: 0, directory: "" };
+
   validateRun(run: EffectiveConfig) {
+    const solver = run.solver.config;
+    if (this.config.generator && !solver.tokenizerPath) throw new TypeError("generated data requires benchmark.solver.config.tokenizerPath");
+    this.dataset = { python: expectNonEmptyString(solver.pythonExecutable ?? "python3", "pythonExecutable"),
+      tolerance: solver.lengthToleranceTokens === undefined || solver.lengthToleranceTokens === 0 ? 0 :
+        expectPositiveInteger(solver.lengthToleranceTokens, "lengthToleranceTokens"),
+      tokenizerPath: solver.tokenizerPath === undefined ? null : this.resolvePath(expectNonEmptyString(solver.tokenizerPath, "tokenizerPath")),
+      directory: join(this.resolvePath(run.output.directory), "datasets") };
     if (run.solver.name !== "sglang-gr" || run.verifier || run.environment.name !== "local" ||
       run.scheduler.name !== "local" || run.scheduler.config.concurrency !== 1)
       throw new TypeError("recommendation requires sglang-gr, local execution, scheduler concurrency=1 and no verifier");
@@ -39,22 +50,20 @@ export class RecommendationBenchmark implements Benchmark {
     }
   }
 
-  private files() {
+  private files(source: SourceLock) {
+    const manifest = expectRecord(source.metadata, "recommendation source").generatedManifestSha256;
+    if (this.config.generator && (typeof manifest !== "string" || !/^[0-9a-f]{64}$/u.test(manifest))) throw new Error("Missing generated dataset digest");
     return [{ path: "prefix1.json", source: this.resolvePath(this.config.prefix1File) },
       { path: "prefix2.json", source: this.resolvePath(this.config.prefix2File) },
-      ...this.config.inputs.map(input => ({ path: `prompts-${input.length}.json`, source: this.resolvePath(input.file) }))];
+      ...this.config.inputs.map(input => ({ path: `prompts-${input.length}.json`, source: typeof manifest === "string" ? join(this.dataset.directory, manifest, input.file) : this.resolvePath(input.file) }))];
   }
 
-  async resolveSource(previous: SourceLock | null, signal: AbortSignal): Promise<SourceLock> {
-    const files = [];
-    for (const { path, source } of this.files()) {
-      const hash = createHash("sha256");
-      for await (const chunk of createReadStream(source, { signal })) hash.update(chunk);
-      files.push({ path, sha256: hash.digest("hex"), origin: `recommendation:${path}` });
-    }
+  async resolveSource(previous: SourceLock | null, signal: AbortSignal, activity?: ActivityListener): Promise<SourceLock> {
+    const { files, manifestSha256 } = await prepareDataset(this.config, this.dataset, this.resolvePath, signal);
+    if (manifestSha256) activity?.({ lines: ["Generated dataset: " + join(this.dataset.directory, manifestSha256, "dataset.json")] });
     const { scenario, tag, beamWidth, decodeSteps, concurrency, requests, warmup, comparison } = this.config;
     const lock = { source: "recommendation:local", revision: fingerprintConfig(files), files,
-      metadata: { ...(this.config.collections && { collections: this.config.collections }), scenario, tag, beamWidth, decodeSteps, concurrency, requests, warmup, comparison: comparison ?? null } };
+      metadata: { ...(manifestSha256 && { generatedManifestSha256: manifestSha256 }), ...(this.config.collections && { collections: this.config.collections }), scenario, tag, beamWidth, decodeSteps, concurrency, requests, warmup, comparison: comparison ?? null } };
     if (previous && fingerprintConfig(previous) !== fingerprintConfig(lock)) throw new Error("Recommendation source or workload changed since the run was created");
     return lock;
   }
@@ -97,7 +106,7 @@ export class RecommendationBenchmark implements Benchmark {
     if (profiling && (!route || (route.lengths && !route.lengths.includes(Number(length))))) throw new TypeError("Unexpected profiling length");
     if (!this.config.inputs.some(input => input.length === length) || typeof length !== "number" || ref.id !== (profiling ? "profiling-L" : "recommendation-L") + length)
       throw new TypeError("Invalid recommendation task");
-    const files = this.files().filter(file => ["prefix1.json", "prefix2.json", `prompts-${length}.json`].includes(file.path));
+    const files = this.files(source).filter(file => ["prefix1.json", "prefix2.json", `prompts-${length}.json`].includes(file.path));
     const workload = lockedPoint(source, length);
     const paths = Object.fromEntries(files.map(file => [file.path, file.source]));
     return { input: { id: ref.id, prompt: `Recommendation performance at target length ${length}`, payload: { workload, files: paths, ...(route && { collection: route.type, service: route.service }) } },

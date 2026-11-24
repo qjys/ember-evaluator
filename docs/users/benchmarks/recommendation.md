@@ -2,6 +2,21 @@
 
 [中文](recommendation.zh-CN.md) · [Five-length experiment](../../../playbook/recommendation/north-star.yaml) · [Custom workload](../../../playbook/recommendation/custom.yaml)
 
+## Choose a data source
+
+The default `benchmark.config.dataMode: files` reads the existing north-star prompt directory or the custom length/file pairs. Set `dataMode: generated` to create prompts from complete legal A/B/C SIDs in your local catalogs. Configure the local tokenizer under `benchmark.solver.config.tokenizerPath`. Both modes validate the input before any HTTP request; supplying a tokenizer also checks whole-prompt token lengths.
+
+```bash
+arsi-evaluator run playbook/recommendation/generated.yaml --dry-run
+arsi-evaluator run playbook/recommendation/generated.yaml
+```
+
+The [generated workload](../../../playbook/recommendation/generated.yaml) sets `generator.seed` (default 42), `lengths` and `samplesPerLength` (default 4). The request count controls how often the saved pool is traversed. North-star retains its five ordered lengths, four prompts each, two warmups and eight measured requests. Keep a token tolerance appropriate for complete SIDs. Omit both `inputs` and `promptDir` for generation.
+
+Generation does not require a prompt directory. Each draw chooses a nonempty (A,B) group uniformly and then draws a C from that group. Small catalogs can generate repeated histories; the manifest records both total and distinct prompt counts.
+
+Find the replayable files in `datasets/<manifest-sha256>/` under the experiment output root, beside the run directory. The linked `dataset.json` records the seed, generator version, serialized tokenizer and catalog digests, actual token lengths and file hashes. Performance and profiling consume the same files. For exact replay, pass them as custom file inputs, or pass the directory as the north-star prompt directory for a five-length batch-of-four dataset. Archive this directory alongside the run.
+
 Start SGLang-GR with your model and tokenizer on the NPU host. Run Evaluator on the same host and set the service root URL, for example `http://127.0.0.1:30000`. Reserve the service for this experiment because measurement resets its GR counters after warmup.
 
 ```bash

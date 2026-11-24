@@ -24,7 +24,8 @@ export class RecommendationProfilingMetrics implements Metrics {
         attempt: record ? "tasks/" + safeTaskKey(id) + "/attempts/" + record.key.attemptId : null,
         errors: record?.errors.map(error => error.message) ?? [] };
     });
-    return { applicable: ids.length > 0, scenario: meta.scenario ?? null, tag: meta.tag ?? null,
+    return { applicable: ids.length > 0, dataMode: meta.generatedManifestSha256 ? "generated" : "files",
+      generatedManifestSha256: meta.generatedManifestSha256 ?? null, scenario: meta.scenario ?? null, tag: meta.tag ?? null,
       collections: meta.collections, sourceRevision: snapshot.run.source?.revision ?? null, complete: ids.length > 0 && points.every(p => p.valid), points };
   }
 }

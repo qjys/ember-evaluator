@@ -25,7 +25,8 @@ test("resume rejects changed catalogs and the prepared task carries original pat
   temporary.push(dir);
   const config = parseRecommendationConfig({ scenario: "custom", prefix1File: "a", prefix2File: "b", inputs: [{ length: 128, file: "prompt" }] });
   const bench = new RecommendationBenchmark(config, file => join(dir, file));
-  for (const file of ["a", "b", "prompt"]) await writeFile(join(dir, file), file);
+  for (const [file, data] of [["a", '{"0":[0]}'], ["b", '{"0,0":[0]}'], ["prompt", '["test"]']] as const)
+    await writeFile(join(dir, file), data);
   const source = await bench.resolveSource(null, signal);
   const refs = [];
   for await (const ref of bench.enumerate(source, signal)) refs.push(ref);
@@ -33,7 +34,7 @@ test("resume rejects changed catalogs and the prepared task carries original pat
   expect(task.input.payload).toMatchObject({ workload: { digests: Object.fromEntries(source.files.map(f => [f.path, f.sha256])) },
     files: { "prefix1.json": join(dir, "a"), "prompts-128.json": join(dir, "prompt") } });
   await expect(bench.resolveSource(source, signal)).resolves.toEqual(source);
-  await writeFile(join(dir, "a"), "changed");
+  await writeFile(join(dir, "a"), '{"0": [0]}');
   await expect(bench.resolveSource(source, signal)).rejects.toThrow(/changed/);
 });
 

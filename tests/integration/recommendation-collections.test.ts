@@ -4,14 +4,16 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { text } from "node:stream/consumers";
+import { fileURLToPath } from "node:url";
 import { stringify } from "yaml";
 import { expect, test } from "vitest";
 import { runCli } from "../../src/cli/main.js";
 
-test.each(["both", "host-only", "performance", "profiling", "zero-hit", "request-error"])(
+test.each(["both", "host-only", "performance", "profiling", "zero-hit", "request-error", "generated"])(
   "routes collection %s and rebuilds linked metrics offline", async mode => {
     const dir = await mkdtemp(join(tmpdir(), "gr-collections-"));
-    const events: string[] = [];
+    const events: string[] = [], performancePrompts: string[] = [], profilingPrompts: string[] = [];
+    const previousPythonPath = process.env.PYTHONPATH;
     let tracing = false, destination = "";
     const servers = ["performance", "profiling"].map(role => createServer(async (req, res) => {
       events.push(role + req.url);
@@ -39,6 +41,8 @@ test.each(["both", "host-only", "performance", "profiling", "zero-hit", "request
         return res.end("stopped");
       }
       if (req.url === "/v1/gr/beam_search") {
+        const { prompt } = JSON.parse(await text(req));
+        (role === "profiling" ? profilingPrompts : performancePrompts).push(prompt);
         if (tracing && mode === "request-error") {
           res.statusCode = 500;
           return res.end("{}");
@@ -60,6 +64,10 @@ test.each(["both", "host-only", "performance", "profiling", "zero-hit", "request
       }
       for (const [file, data] of Object.entries({ "p1.json": {"0":[0]}, "p2.json": {"0,0":[0]}, "prompts.json": ["one","two"] }))
         await writeFile(join(dir, file), JSON.stringify(data));
+      if (mode === "generated") {
+        await writeFile(join(dir, "vocab.json"), JSON.stringify({ "<s_a_0>": 151669, "<s_b_0>": 159861, "<s_c_0>": 168053 }));
+        process.env.PYTHONPATH = fileURLToPath(new URL("../fixtures/recommendation/tokenizer-stub/", import.meta.url));
+      }
       const standard = mode === "both";
       const lengths = standard ? [128, 512, 1024, 5120, 10240] : [128, 512];
       if (standard) for (const length of lengths)
@@ -69,9 +77,10 @@ test.each(["both", "host-only", "performance", "profiling", "zero-hit", "request
         ...(Object.keys(services).length === 2 ? { collections: [{ type: "profiling", service: "profiling", ...(standard ? {} : { lengths: [128] }) },
           { type: "performance", service: "performance" }] } : {}),
         config: { tag: "fast", ...(standard ? { promptDir: "." } : {
-          inputs: lengths.map(length => ({ length, file: "prompts.json" })), requests: 1, warmup: 0 }),
+          ...(mode === "generated" ? { dataMode: "generated", generator: { lengths, samplesPerLength: 3 } } :
+            { inputs: lengths.map(length => ({ length, file: "prompts.json" })) }), requests: 1, warmup: 0 }),
           prefix1File: "p1.json", prefix2File: "p2.json" },
-        solver: { config: { exportTimeoutSeconds: 12, pythonExecutable: execFileSync(process.platform === "win32" ? "python" : "python3",
+        solver: { config: { ...(mode === "generated" ? { tokenizerPath: dir, lengthToleranceTokens: 3 } : {}), exportTimeoutSeconds: 12, pythonExecutable: execFileSync(process.platform === "win32" ? "python" : "python3",
           ["-c", "import sys;print(sys.executable)"], { encoding: "utf8" }).trim() } } }, output: { directory: join(dir, "out") } }));
       const out: string[] = [], errors: string[] = [];
       const io = { out: (v: string) => out.push(v), error: (v: string) => errors.push(v) };
@@ -80,6 +89,7 @@ test.each(["both", "host-only", "performance", "profiling", "zero-hit", "request
       const failed = ["zero-hit", "host-only", "request-error"].includes(mode);
       expect(await runCli(["run", yaml], io), errors.join("\n")).toBe(failed ? 1 : 0);
       expect(tracing).toBe(false);
+      if (mode === "generated") expect(profilingPrompts).toEqual([performancePrompts[0], performancePrompts[0]]);
       const run = out.at(-1)!;
       const parent = JSON.parse(await readFile(join(run, "metrics.json"), "utf8"));
       expect(parent.collections.sort()).toEqual(Object.keys(services).sort());
@@ -115,6 +125,8 @@ test.each(["both", "host-only", "performance", "profiling", "zero-hit", "request
       }
     } finally {
       for (const s of servers) if (s.listening) await new Promise<void>(resolve => s.close(() => resolve()));
+      if (previousPythonPath === undefined) delete process.env.PYTHONPATH;
+      else process.env.PYTHONPATH = previousPythonPath;
       delete process.env.GR_TEST_profiling;
       delete process.env.GR_TEST_performance;
       await rm(dir, { recursive: true, force: true });

@@ -6,6 +6,15 @@ import { expectRecord } from "../../core/validation/input.js";
 import { escaped } from "./fields.js";
 import { renderRecommendationTable } from "./recommendation-table.js";
 
+export function recommendationDataSource(snapshot: ResultSnapshot, runRoot = ""): string[] {
+  const source = snapshot.run.source;
+  if (source?.source !== "recommendation:local") return [];
+  const meta = expectRecord(source.metadata, "recommendation source"), digest = meta.generatedManifestSha256;
+  const manifest = typeof digest === "string" && /^[a-f0-9]{64}$/u.test(digest)
+    ? ` · [生成数据清单](${runRoot}../datasets/${digest}/dataset.json) · 清单 SHA-256 \`${digest}\`` : "";
+  return [`数据模式 \`${manifest ? "generated" : "files"}\` · 输入 revision \`${source.revision}\`${manifest}`, ""];
+}
+
 export function profilingTable(value: JsonValue | undefined, root = ""): string[] {
   if (!value || typeof value !== "object" || Array.isArray(value) || value.applicable !== true || !Array.isArray(value.points)) return [];
   const lines = ["## NPU 算子采集", "", "| 长度 | 设备证据 | 导出目录 | Stage (μs) | Computing (μs) | Free (μs) | Kernel 数 | 设备耗时最高的算子 |",
@@ -59,6 +68,6 @@ export function collectionReports(snapshot: ResultSnapshot, metrics: MetricResul
     return { directory, metrics: { [key]: metric, collection: { type: directory, service: String(route.service),
       scenario: String(meta.scenario), tag: String(meta.tag) } },
       markdown: ["# " + directory, "", `Run ${snapshot.run.runId} · ${escaped(String(meta.tag))} · service ${escaped(String(route.service))}`,
-        "", "[完整测评](../report.md) · [采集指标](metrics.json)", "", ...section].join("\n") };
+        "", "[完整测评](../report.md) · [采集指标](metrics.json)", "", ...recommendationDataSource(snapshot, "../"), ...section].join("\n") };
   });
 }

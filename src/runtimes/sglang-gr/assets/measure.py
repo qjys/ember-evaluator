@@ -87,7 +87,7 @@ def record_choices(row, response, depth, prefix1, prefix2):
     row["sidDetail"] = "; ".join(details)
 
 
-def tokenize_inputs(directory, prompts, target, tolerance, prefix1, prefix2):
+def catalog_tokenizer(directory, prefix1, prefix2):
     from transformers import AutoTokenizer
     tokenizer = AutoTokenizer.from_pretrained(directory, local_files_only=True)
     vocab = tokenizer.get_vocab()
@@ -96,10 +96,18 @@ def tokenize_inputs(directory, prompts, target, tolerance, prefix1, prefix2):
     for axis, base, used in zip("abc", (151669, 159861, 168053), components):
         if any(vocab.get(f"<s_{axis}_{i}>") != base + i for i in used):
             raise ValueError(f"tokenizer has incompatible SID offsets for {axis}")
+    return tokenizer
+
+
+def input_lengths(tokenizer, prompts, target, tolerance):
     lengths = [len(tokenizer.encode(prompt, add_special_tokens=False)) for prompt in prompts]
     if any(abs(length - target) > tolerance for length in lengths):
         raise ValueError(f"prompt token lengths {lengths} differ from target {target} by more than {tolerance}")
     return lengths
+
+
+def tokenize_inputs(directory, prompts, target, tolerance, prefix1, prefix2):
+    return input_lengths(catalog_tokenizer(directory, prefix1, prefix2), prompts, target, tolerance)
 
 
 def verify_catalog_files(paths, point):

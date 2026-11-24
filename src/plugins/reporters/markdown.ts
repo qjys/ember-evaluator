@@ -7,7 +7,7 @@ import { selectedRecords } from "../metrics/records.js";
 import { attemptStatus, attemptTimeoutKind, evaluationScore, isAgentTimeout, isEvaluationComplete, isInvalidEvaluation, hasUnconfirmedCleanup } from "../../core/results/evaluation-outcome.js";
 import { renderAgentXTables } from "./agentx-tables.js";
 import { renderKernelTables } from "./kernel-tables.js";
-import { collectionReports, profilingTable } from "./recommendation-collections.js";
+import { collectionReports, profilingTable, recommendationDataSource } from "./recommendation-collections.js";
 import { renderRecommendationTable } from "./recommendation-table.js";
 import { expectRecord } from "../../core/validation/input.js";
 import { parseAgentXSummary } from "../benchmarks/inference-engine/agentx/evidence/summary.js";
@@ -53,7 +53,7 @@ export function renderMarkdown(snapshot: ResultSnapshot, metrics: MetricResults,
     ...(snapshot.run.failure ? [`运行错误：${escaped(snapshot.run.failure.code)} ${escaped(snapshot.run.failure.message)}`, ""] : []),
     ...renderMetrics(metrics), ...renderAgentXTables(metrics["agentx-performance"]),
     ...renderKernelTables(metrics["kernel"], evidenceRoot),
-    ...renderRecommendationTable(metrics["recommendation-performance"]),
+    ...recommendationDataSource(snapshot, evidenceRoot), ...renderRecommendationTable(metrics["recommendation-performance"]),
     ...profilingTable(metrics["recommendation-profiling"], evidenceRoot),
     "## Tasks", "",
     `| 任务 | 状态 | ${performance ? "评分（不适用）" : "评分"} | ${performance ? "测量" : "解题"}用时（秒） | 验证用时（秒） | 轨迹 / 产物 | 错误 | 证据 |`,
