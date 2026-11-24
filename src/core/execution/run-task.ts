@@ -202,6 +202,7 @@ export async function runTask(
       ? components.benchmark.prepare(job.ref, source, active, activity)
       : Promise.resolve(preparation.task));
     if (prepared.input.id !== job.taskId) throw new TypeError("Prepared task identity differs from locked selection");
+    await components.benchmark.validatePrerequisites?.(job.ref, () => components.store.snapshot());
     assertLockedAttachments(prepared, source);
     if (!dependenciesReady && components.benchmark.verificationRuntime)
       prepared = await prepareEnvironment("verify", prepared, preparationSignal =>

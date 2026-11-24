@@ -102,6 +102,17 @@ def tokenize_inputs(directory, prompts, target, tolerance, prefix1, prefix2):
     return lengths
 
 
+def verify_catalog_files(paths, point):
+    # The service opens the original paths. Detect replacements during the window.
+    for name in ("prefix1.json", "prefix2.json"):
+        digest = hashlib.sha256()
+        with open(paths[name], "rb") as source:
+            for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                digest.update(chunk)
+        if digest.hexdigest() != point["digests"][name]:
+            raise ValueError(f"catalog changed during the measurement: {name}")
+
+
 def measure(config):
     point = config["workload"]
     paths = config["files"]
@@ -162,6 +173,11 @@ def measure(config):
         return row
 
     output = Path(config["output"])
+    if config.get("collection") == "profiling":
+        from profile_capture import capture
+        profile = capture(config, http, sample)
+        verify_catalog_files(paths, point)
+        return {"profile": profile}
     with (output / "session.jsonl").open("w", encoding="utf-8") as evidence:
         def save(row):
             evidence.write(json.dumps(row, allow_nan=False) + "\n")
@@ -198,14 +214,7 @@ def measure(config):
             break
         except (OSError, ValueError, HTTPException):
             pass
-    # The service opens the original paths. Detect replacements during the window.
-    for name in ("prefix1.json", "prefix2.json"):
-        digest = hashlib.sha256()
-        with open(paths[name], "rb") as source:
-            for chunk in iter(lambda: source.read(1024 * 1024), b""):
-                digest.update(chunk)
-        if digest.hexdigest() != point["digests"][name]:
-            raise ValueError(f"catalog changed during the measurement: {name}")
+    verify_catalog_files(paths, point)
     return {"wallSeconds": wall_seconds, "resetOk": reset_ok, "counters": counters, "inputTokens": token_lengths, "promptPoolSize": len(prompts)}
 
 

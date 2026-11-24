@@ -97,6 +97,8 @@ Docker 读取构建目录中的文件和权限来计算镜像缓存键。缓存�
 
 Benchmark 分为 `agent-harness/`、`inference-engine/`、`operator/`、`recommendation/`，各自保存所属 Profile 并在本类 `index.ts` 注册。分类不增加 YAML 类别字段，也不在核心执行流程中按类别分支。具体新增位置见 [Benchmark 开发指南](benchmarks.md#新需求的修改入口)。
 
+推荐 Benchmark 以同一 source lock 枚举两类有序测量点。`validatePrerequisites` 在执行前读取已持久化的结果，Solver 按任务绑定外部服务。Reporter 从同一快照生成父报告和 `collectionReports`；Store 在初次发布、续跑和离线重建时保存对应的子目录。
+
 [plugins/index.ts](../../src/plugins/index.ts) 组合注册入口。Benchmark、Solver、Environment、Verifier、Store、Scheduler 使用各自入口；Metrics 和 Reporter 分别由 [metrics/index.ts](../../src/plugins/metrics/index.ts) 和 [reporters/index.ts](../../src/plugins/reporters/index.ts) 注册。外部插件通过显式 `--patch` 加载，省略参数不扫描默认目录，配置方法见[插件开发与加载](plugins.md)。
 
 同一功能可以跨角色目录。例如 AgentX 的输入和证据在 `plugins/benchmarks/inference-engine/agentx/`，负载调用在 `plugins/solvers/agentx-replay.ts`，安装和桥接在 `runtimes/agentx/`，指标与报告分别在 metrics 和 reporters。`evidence/` 直接解析保存的结果，不通过注册入口加载安装器或采样进程；共享版本信息来自无 I/O 的 `runtimes/agentx/versions.ts`。

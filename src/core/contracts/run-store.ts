@@ -10,7 +10,7 @@ import type {
   RemoteAttemptUpdate,
 } from "./result.js";
 import type { JsonValue } from "./task.js";
-import type { TaskReportDocument } from "./reporter.js";
+import type { CollectionReportDocument, TaskReportDocument } from "./reporter.js";
 
 export interface RunStore {
   readonly controlDirectory?: string;
@@ -26,6 +26,6 @@ export interface RunStore {
   updateRemoteAttempt?(update: RemoteAttemptUpdate): Promise<void>;
   snapshot(): Promise<ResultSnapshot>;
   /** Resume starts a separate report directory; updates replace the current reports. */
-  saveReportBundle(snapshotDigest: string, metrics: MetricResults, markdown: string, reports: TaskReportDocument[], mode?: "update" | "resume"): Promise<void>;
+  saveReportBundle(snapshotDigest: string, metrics: MetricResults, markdown: string, reports: TaskReportDocument[], mode?: "update" | "resume", collections?: CollectionReportDocument[]): Promise<void>;
   close(): Promise<void>;
 }

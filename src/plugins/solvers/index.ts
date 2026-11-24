@@ -35,7 +35,7 @@ export function apply(ctx: Context): void {
   }, () => new KernelReplaySolver());
   ctx.evaluator.register("solver", "agentx-replay", parseAgentXReplayConfig, (config, runtime) => new AgentXReplaySolver(config, runtime));
   ctx.evaluator.register("solver", "sglang-gr", parseSglangGrConfig, (config, runtime) =>
-    new SglangGrSolver({ ...config, tokenizerPath: config.tokenizerPath === null ? null : runtime.resolvePath(config.tokenizerPath) }, bindSolverService(runtime)));
+    new SglangGrSolver({ ...config, tokenizerPath: config.tokenizerPath === null ? null : runtime.resolvePath(config.tokenizerPath) }, bindSolverService(runtime), runtime.services));
   ctx.evaluator.register(
     "solver",
     "agentbundle",

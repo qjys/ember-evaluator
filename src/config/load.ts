@@ -222,12 +222,15 @@ function loadResolvedConfig(
   const variables = { ...env, EVALUATOR_CACHE_DIR: env.EVALUATOR_CACHE_DIR ?? join(env.XDG_CACHE_HOME ?? (process.platform === "win32" ? env.LOCALAPPDATA ?? join(homedir(), "AppData", "Local") : join(homedir(), ".cache")), "arsi-evaluator") };
   const judgeInput = expectRecord(expectRecord(normalized.benchmark, "benchmark").config, "benchmark.config").judgeService;
   const judgeService = judgeInput === undefined ? undefined : expectNonEmptyString(expandVariables(judgeInput, variables), "benchmark.config.judgeService");
+  const benchmark = expectRecord(normalized.benchmark, "benchmark");
+  const collectionRoutes = benchmark.name === "recommendation" ? expectRecord(benchmark.config, "benchmark.config").collections : undefined;
+  const requestedServices = new Set(Array.isArray(collectionRoutes) ? collectionRoutes.map(row => expectRecord(row, "collections[]").service) : []);
   const services: Record<string, ModelConfig> = {};
   const auths: Record<string, RuntimeAuth> = {};
   const references: Record<string, string> = {};
   for (const [name, value] of Object.entries(rawServices)) {
     const binding = resolveServiceAuth(expectRecord(value, `services.${name}`), variables, `services.${name}`,
-      name === solverService || name === verifierService || name === judgeService, options.allowMissingAuth === true);
+      name === solverService || name === verifierService || name === judgeService || requestedServices.has(name), options.allowMissingAuth === true);
     services[name] = binding.model;
     references[name] = binding.reference;
     if (binding.auth) auths[name] = binding.auth;

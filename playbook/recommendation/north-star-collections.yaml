@@ -1,0 +1,30 @@
+hardware: npu
+services:
+  performance:
+    model: Qwen3-0.6B-OneRecVocab
+    base_url: http://127.0.0.1:30000
+    api_key: ${MODEL_API_KEY}
+  profiling:
+    model: Qwen3-0.6B-OneRecVocab
+    base_url: http://127.0.0.1:30001
+    api_key: ${MODEL_API_KEY}
+benchmark:
+  name: recommendation
+  scenario: north-star
+  config:
+    tag: fast
+    promptDir: ${GR_PROMPT_DIR}
+    prefix1File: ${GR_PREFIX1_FILE}
+    prefix2File: ${GR_PREFIX2_FILE}
+  solver:
+    config:
+      tokenizerPath: ${GR_TOKENIZER_DIR}
+      lengthToleranceTokens: 8
+  collections:
+    - type: performance
+      service: performance
+    - type: profiling
+      service: profiling
+      # lengths: [128, 10240]
+run:
+  timeoutSeconds: 3600

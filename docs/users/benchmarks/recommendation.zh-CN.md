@@ -33,6 +33,32 @@ python -m sglang.launch_server --model "$GR_TOKENIZER_DIR" --device npu --attent
 
 分别运行 base 与 fast。fast 服务进程启动时设置 `SGLANG_NPU_SHARED_PREFIX_DECODE=1`、`SGLANG_NPU_SHARED_PREFIX_MIN_LEN=32`，实验中的 `tag` 设置为 `fast`。这里测量同一条 prompt 的多个 beam 共享前缀的 decode 路径。报告展示正式窗口的 `shared_prefix_forward / decode_forward`，标准 fast 组以 L=128 的命中比例判定，即使长档命中，L=128 零命中也会使 fast 无效。某档取不到计数器快照时视为缺档。已有快照中缺少的计数字段按原脚本取 0。阶段时间以服务端微秒累加值除以对应 group 数再换算为毫秒，tail 为 span 减去四个互不重叠阶段的余量。Profiler 单独采集。
 
+## 一个 run 同时采集 E2E 和算子指标
+
+使用[双服务实验](../../../playbook/recommendation/north-star-collections.yaml)。两端使用同一候选构建、模型、词表、catalog 和 base/fast 设置。外部启动普通服务并监听 30000。启动 profiling 服务时，在同一条启动命令前设置 `SGLANG_NPU_PROFILE_AUTO_EXPORT=1`，端口改为 30001。原脚本通过 HTTP 请求 CPU、NPU activities，其诊断依赖此环境变量自动导出。私有服务构建的其他前置条件可在其 `profiler_manager` 实现中核实。Evaluator 和两端都需要能读相同绝对路径的 catalog。profiling 服务必须能按 evaluator 提供的绝对路径写入 attempt 目录；分容器部署时用相同绝对路径挂载 results 目录并赋予相应读写权限。
+
+在已配置 GR 路径与设备映射的两个服务终端分别执行。base 实验将两条命令的 `fast` 和 YAML 的 `tag` 一起改为 `base`。
+
+```bash
+# 终端 A：普通性能服务
+GR_PORT=30000 bash scripts/recommendation/gr-debug.sh serve fast
+# 终端 B：支持导出的采集服务
+SGLANG_NPU_PROFILE_AUTO_EXPORT=1 GR_PORT=30001 bash scripts/recommendation/gr-debug.sh serve fast
+```
+
+在 evaluator 终端执行：
+
+```bash
+arsi-evaluator run playbook/recommendation/north-star-collections.yaml --dry-run
+arsi-evaluator run playbook/recommendation/north-star-collections.yaml
+arsi-evaluator report "$RUN"  # RUN 取上一步末行的 run 目录
+```
+
+按 `benchmark.collections[].service` 绑定地址和凭据。只保留一类 collection 及对应 service 即可单采；原有 `services.default` 示例仍只测 E2E。五档性能测完后，各 profiling 档取本档第一条 prompt，先预热 1–5 次（单次 ≤1000 ms 时结束），再 POST `/start_profile`，设置 CPU/NPU 活动、record_shapes=true、with_stack=false、profile_by_stage=false。重置计数器后仅采一次约束搜索，再 POST `/stop_profile`，等待导出文件稳定。默认每档等候 1800 秒，可用 `benchmark.solver.config.exportTimeoutSeconds` 调整，并为整个任务留足超时余量。在 profiling 条目添加 `lengths: [128, 10240]` 可只采首尾档。组合采集遇到 E2E 点失败或 fast 快路未验证（north-star 以 L=128 为准）会跳过 profiling；超过历史时延预算仍可采集。
+
+父级 `metrics.json` 同时提供 `recommendation-performance` 和 `recommendation-profiling` 给 RSI。两个子目录各有 report.md 和 metrics.json，关联同一 run ID、输入摘要与父快照。profiling 读数使用微秒，profiling 请求 E2E 单独保存，不进入性能 p50。每个 profiling attempt 的 `agent/trace/` 留存原始导出，报告链接指向具体目录。只有 host 数据时会保留 host 统计并将该点标为缺少设备证据；失败原因可在父报告和对应 attempt 查看。
+
+
 要对比同一 session 的 vLLM-GR eager 结果，在 `benchmark.config.comparison` 填写实际的 `session`、`machine`、`devices`、`modelRevision`、`tokenizerRevision`（均为字符串）。每档 `comparisonKey` 根据这些声明、输入文件摘要、负载和计时口径计算。将基线端按相同条件计算的逐档 `{ length, comparisonKey, p50Ms }` 记录填入 `recommendation-performance` 指标的 `config.eagerBaseline`。无匹配基线时仍可读取实测 p50。五档完整且 fast 条件满足后，报告才对标准实验给出同 session 的 L=128 门槛结论。
 
 基线端生成 key 时，取其实际输入文件的 SHA-256（小写十六进制），按下列结构生成 JSON。所有对象键按字典序排序，使用 UTF-8 编码，省略空白，最后对 JSON 字节计算 SHA-256。示例中的尖括号表示应替换的值。

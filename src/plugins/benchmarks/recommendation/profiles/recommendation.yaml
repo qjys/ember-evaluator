@@ -13,7 +13,7 @@ defaults:
   scheduler:
     name: local
     concurrency: 1
-  metrics: [recommendation-performance, duration]
+  metrics: [recommendation-performance, recommendation-profiling, duration]
   reporter: markdown
   run:
     timeoutSeconds: 1800

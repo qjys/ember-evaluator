@@ -38,7 +38,9 @@ export class RecommendationPerformanceMetrics implements Metrics {
     const meta = source.metadata;
     if (!meta || typeof meta !== "object" || Array.isArray(meta)) throw new TypeError("Invalid recommendation source metadata");
     const records = new Map(selectedRecords(snapshot).map(item => [item.key.taskId, item]));
-    const points = snapshot.run.taskIds.map(id => {
+    const ids = snapshot.run.taskIds.filter(id => !id.startsWith("profiling-L"));
+    if (!ids.length) return { applicable: false, points: [] };
+    const points = ids.map(id => {
       const length = Number(/^recommendation-L(\d+)$/u.exec(id)?.[1]);
       expectPositiveInteger(length, "task length");
       const record = records.get(id);

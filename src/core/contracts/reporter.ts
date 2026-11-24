@@ -9,7 +9,14 @@ export type TaskReportDocument = TaskReportTarget & {
   markdown: string;
 };
 
+export type CollectionReportDocument = {
+  directory: "performance" | "profiling";
+  metrics: MetricResults;
+  markdown: string;
+};
+
 export interface Reporter {
+  collectionReports?(snapshot: ResultSnapshot, metrics: MetricResults): CollectionReportDocument[];
   /** Optional independent reports; each target selects exactly one persisted task. */
   taskReports?(snapshot: ResultSnapshot, metrics: MetricResults): TaskReportTarget[];
   render(snapshot: ResultSnapshot, metrics: MetricResults, context?: ReportContext): Promise<string>;

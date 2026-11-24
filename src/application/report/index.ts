@@ -38,7 +38,8 @@ export async function saveReport(store: RunStore, metrics: Metrics[], reporter: 
         { taskId: target.taskId, evidenceRoot: "../../" }) });
   }
   const markdown = await reporter.render(structuredClone(snapshot), structuredClone(values));
-  await store.saveReportBundle(snapshot.digest, values, markdown, documents, mode);
+  const collections = reporter.collectionReports?.(snapshot, values) ?? [];
+  await store.saveReportBundle(snapshot.digest, values, markdown, documents, mode, collections);
 }
 
 async function loadReporting(manifest: RunManifest, runDir: string) {

@@ -13,6 +13,7 @@ export type BenchmarkSelection = Omit<PluginSelection, "service"> & {
   name: string;
   version?: string;
   scenario?: string;
+  collections?: { type: "performance" | "profiling"; service: string; lengths?: number[] }[];
   solver?: string | PluginSelection;
   verifier?: string | PluginSelection;
 };
@@ -94,7 +95,7 @@ export function parseUserConfig(value: unknown): UserConfig {
     parsedServices[name] = parsed;
   }
   const rawBenchmark = typeof record.benchmark === "string" ? { name: record.benchmark } : expectRecord(record.benchmark, "benchmark");
-  rejectUnknown(rawBenchmark, ["name", "config", "version", "scenario", "solver", "verifier"], "benchmark");
+  rejectUnknown(rawBenchmark, ["name", "config", "version", "scenario", "solver", "verifier", "collections"], "benchmark");
   const benchmark: BenchmarkSelection = {
     name: expectNonEmptyString(rawBenchmark.name, "benchmark.name"),
     ...(rawBenchmark.config === undefined ? {} : { config: structuredClone(expectRecord(rawBenchmark.config, "benchmark.config")) }),
@@ -103,6 +104,25 @@ export function parseUserConfig(value: unknown): UserConfig {
     ...(rawBenchmark.solver === undefined ? {} : { solver: normalizeSelection(rawBenchmark.solver, "benchmark.solver", [], true) }),
     ...(rawBenchmark.verifier === undefined ? {} : { verifier: normalizeSelection(rawBenchmark.verifier, "benchmark.verifier", [], true) }),
   };
+  if (rawBenchmark.collections !== undefined) {
+    if (benchmark.name !== "recommendation") throw new TypeError("benchmark.collections requires recommendation");
+    if (benchmark.config?.collections !== undefined) throw new TypeError("Declare benchmark.collections only once");
+    benchmark.config = { ...benchmark.config, collections: structuredClone(rawBenchmark.collections) };
+  }
+  if (benchmark.name === "recommendation") {
+    let collections = benchmark.config?.collections;
+    if (collections === undefined && Object.keys(parsedServices).every(key => key === "performance" || key === "profiling")) {
+      collections = Object.keys(parsedServices).map(type => ({ type, service: type }));
+      benchmark.config = { ...benchmark.config, collections };
+    }
+    if (Array.isArray(collections) && collections.length) {
+      const first = expectRecord(collections.find(row => row?.type === "performance") ?? collections[0], "benchmark.collections[]");
+      const primary = expectNonEmptyString(first.service, "benchmark.collections[].service");
+      const solver = normalizeSelection(benchmark.solver ?? {}, "benchmark.solver", [], true);
+      if (solver.service !== undefined && solver.service !== primary) throw new TypeError("solver.service conflicts with benchmark.collections");
+      benchmark.solver = { ...solver, service: primary };
+    }
+  }
   const result: UserConfig = { services: parsedServices, benchmark,
     ...(record.hardware === undefined ? {} : { hardware: parseHardware(record.hardware) }),
     ...(record.deployment === undefined ? {} : { deployment: parseDeployment(record.deployment) }) };

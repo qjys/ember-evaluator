@@ -97,6 +97,8 @@ When `taskImage()` builds a local task snapshot, it starts a [package relay](../
 
 Benchmarks use `agent-harness/`, `inference-engine/`, `operator/`, and `recommendation/`, each with its own Profiles and registration `index.ts`. These categories add no YAML category field and no category branches to core execution. See [where to add behavior](benchmarks.en.md#where-to-add-new-behavior).
 
+The recommendation Benchmark enumerates ordered performance and profiling tasks from one source lock. Its optional `validatePrerequisites` hook reads persisted results before dispatch to the service selected by the task. The Reporter derives the parent and collection reports from the same snapshot. The Store publishes child directories on initial publication, resume and offline rebuild.
+
 [plugins/index.ts](../../src/plugins/index.ts) composes registration entries. Benchmark, Solver, Environment, Verifier, Store, and Scheduler have their own entries; Metrics and Reporter use [metrics/index.ts](../../src/plugins/metrics/index.ts) and [reporters/index.ts](../../src/plugins/reporters/index.ts) respectively. External plugins use explicit `--patch` loading; omitting it does not scan a default directory. See [plugin development](plugins.en.md).
 
 A feature can span roles. AgentX input/evidence lives in `plugins/benchmarks/inference-engine/agentx/`, execution calls in `plugins/solvers/agentx-replay.ts`, installation/bridging in `runtimes/agentx/`, and metrics/reporting in their respective roles. `evidence/` parses saved results directly without importing registration entries, installers, or samplers; shared versions come from the I/O-free `runtimes/agentx/versions.ts`.

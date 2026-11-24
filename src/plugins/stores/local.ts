@@ -32,7 +32,7 @@ import { assertSourceLock } from "../../core/results/source-lock.js";
 import { validateSolverProvenance } from "../../core/results/solver-provenance.js";
 import { assertRunIdentity } from "../../core/results/run-identity.js";
 import { assertPreparationDiagnostics, validPreparationBudget } from "../../core/preparation/preparation-validation.js";
-import type { TaskReportDocument } from "../../core/contracts/reporter.js";
+import type { CollectionReportDocument, TaskReportDocument } from "../../core/contracts/reporter.js";
 
 
 export class StoreError extends Error {
@@ -604,7 +604,7 @@ export class LocalRunStore implements RunStore {
     return this.readSnapshot();
   }
 
-  async saveReportBundle(digest: string, metrics: MetricResults, markdown: string, documents: TaskReportDocument[], mode: "update" | "resume" = "update"): Promise<void> {
+  async saveReportBundle(digest: string, metrics: MetricResults, markdown: string, documents: TaskReportDocument[], mode: "update" | "resume" = "update", collections: CollectionReportDocument[] = []): Promise<void> {
     return this.write(async () => {
       const { directory, run } = this.active();
       if ((await this.readSnapshot()).digest !== digest)
@@ -616,6 +616,9 @@ export class LocalRunStore implements RunStore {
           throw new StoreError("REPORT_FAILED", "Unsafe or duplicate independent report target");
         ids.add(document.id.toLowerCase()); tasks.add(document.taskId);
       }
+      const collectionNames = collections.map(c => c.directory);
+      if (new Set(collectionNames).size !== collectionNames.length || collectionNames.some(name => name !== "performance" && name !== "profiling"))
+        throw new StoreError("REPORT_FAILED", "Invalid collection report directory");
       const references = documents.map(({ id, taskId, title, snapshotDigest }) => ({ id, taskId, title, snapshotDigest }));
       let revision = 1;
       const documentTexts = (document: TaskReportDocument) => ({
@@ -631,9 +634,14 @@ export class LocalRunStore implements RunStore {
       const recovery = await inspectReportPair(directory, digest);
       if (recovery) await atomicWrite(join(directory, "report-recovery.json"), serialized(recovery));
       const metricsText = serialized({ schemaVersion: 1, revision, snapshotDigest: digest, metrics,
-        ...(documents.length ? { reports: references } : {}) });
+        ...(documents.length ? { reports: references } : {}), ...(collections.length ? { runId: run.runId, sourceRevision: run.source?.revision, collections: collectionNames } : {}) });
       const reportText = `<!-- snapshotDigest: ${digest} -->\n<!-- revision: ${revision} -->\n${markdown}\n`;
       const files = new Map<string, string>([["metrics.json", metricsText], ["report.md", reportText]]);
+      for (const child of collections) {
+        files.set(child.directory + "/metrics.json", serialized({ schemaVersion: 1, revision, parentSnapshotDigest: digest,
+          runId: run.runId, sourceRevision: run.source?.revision, metrics: child.metrics }));
+        files.set(child.directory + "/report.md", `<!-- parentSnapshotDigest: ${digest} -->\n${child.markdown}\n`);
+      }
       for (const document of documents) {
         const texts = documentTexts(document);
         files.set(`points/${document.id}/metrics.json`, texts.metrics);
@@ -690,6 +698,12 @@ export class LocalRunStore implements RunStore {
               if (await exists(join(directory, path))) previous.set(path, await readFile(await checkedPath(directory, path), "utf8"));
             }
           }
+          for (const group of ["performance", "profiling"]) {
+            for (const name of ["report.md", "metrics.json"]) {
+              const path = group + "/" + name;
+              if (await exists(join(directory, path))) previous.set(path, await readFile(await checkedPath(directory, path), "utf8"));
+            }
+          }
           await publish("initial", previous, true);
         }
         const names = (await readdir(reports)).filter(name => /^resume-[1-9]\d*$/u.test(name));
@@ -707,6 +721,14 @@ export class LocalRunStore implements RunStore {
           const texts = documentTexts(document);
           await atomicWrite(join(target, "metrics.json"), texts.metrics);
           await atomicWrite(join(target, "report.md"), texts.report);
+        }
+      }
+      for (const group of collectionNames) {
+        await mkdir(join(directory, group), { recursive: true });
+        await checkedPath(directory, group);
+        for (const name of ["report.md", "metrics.json"]) {
+          const path = group + "/" + name;
+          await atomicWrite(join(directory, path), files.get(path)!);
         }
       }
       await atomicWrite(join(directory, "metrics.json"), metricsText);
