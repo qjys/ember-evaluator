@@ -25,12 +25,18 @@ let relay;
 try {
   resources = await taskServers(input);
   if (toolPolicy.skills !== "disabled") await stageSkills(input.skillsDirectories, join(home, "skills"));
-  relay = await startModelRelay({ completeSearch: resources.completeSearch, api, baseUrl, apiKey, token, reasoningEffort, disableHostedSearch: toolPolicy.webSearch === "disabled", disableMcp: toolPolicy.mcp === "disabled", disableBuiltinTools: toolPolicy.tools === "none" });
+  relay = await startModelRelay({
+    completeSearch: resources.completeSearch, api, baseUrl, apiKey, token,
+    disableHostedSearch: toolPolicy.webSearch === "disabled", disableMcp: toolPolicy.mcp === "disabled",
+    disableBuiltinTools: toolPolicy.tools === "none",
+  });
   await writeFile(join(home, "models.json"), JSON.stringify({
     models: [{
       id: model, name: model, vendor: "openai", api, apiKey: token,
       url: api === "openai-completions" ? relay.endpoint + "/chat/completions" : relay.endpoint,
         supportsToolCall: true,
+        // CodeBuddy only serializes native per-agent effort for reasoning-capable models.
+        ...(reasoningEffort === undefined ? {} : { supportsReasoning: true }),
         // The Chat adapter uses this flag for both image and document blocks.
         supportsImages: supportsImages || media.some(item => item.mediaType === "application/pdf"),
       ...(contextWindow === undefined ? {} : { maxInputTokens: contextWindow }),

@@ -189,6 +189,8 @@ Provide both fields; the maximum must be at least the default. This fragment ret
 
 ## Codex
 
+The service’s `reasoningEffort` maps to Codex’s native `model_reasoning_effort`.
+
 Codex still runs through `exec`. The evaluator provides a separate `web_fetch` tool through its local MCP server, so a solver can fetch a page with search disabled. Disabling fetch also removes Codex's combined native search and page-opening tool. Search then uses Exa alone and returns source URLs. With `mcp: disabled`, explicit fetch or explicit search with fetch disabled fails before startup. With `tools: none`, the evaluator removes both supplementary web tools and leaves independently declared MCP servers subject to the `mcp` setting.
 
 `codex` runs Codex CLI in the task working directory on the local machine or in Docker. Evaluator installs CLI version `0.167.0` during environment preparation and authenticates with the selected model service. Save the following experiment YAML and set `CODEX_MODEL`, `CODEX_ENDPOINT`, and `CODEX_API_KEY` before running it.
@@ -217,6 +219,8 @@ output:
 - For images and PDF attachments in `pages` mode, set `inputModalities: [text, image]` on the service. Codex passes both as images. Each attempt saves Codex events, the Evaluator trajectory, and stderr under `agent/`. See [image and PDF evaluations](multimodal.md).
 
 ## Claude Code
+
+An explicit service `reasoningEffort` sets the main agent’s effort through the native `--effort` flag. The CLI resolves the setting against the model’s supported levels and selects the effort for subagents and auxiliary requests.
 
 When task networking permits fetching, Claude Code enables native WebFetch for the main agent and subagents. The launcher sets `skipWebFetchPreflight` for those attempts to skip Anthropic’s domain safety lookup. Task networks `none` and `model-api`, `webFetch: disabled`, and `tools: none` all remove WebFetch.
 
@@ -279,11 +283,15 @@ The preparation timeouts allow up to 30 minutes for the initial build and can be
 
 Use the API base URL. Chat Completions and Responses usually use a URL ending in `/v1`. The solver also accepts `api: openai-responses` and `api: anthropic-messages`. Omit `retry`.
 
+The service’s `reasoningEffort` sets `reasoningLevel` in ZCode’s native model selection. ZCode resolves the level against the model’s capabilities and chooses the effort for WebFetch, WebSearch, and background requests.
+
 ZCode enables Bash in local and Docker runs. Use local mode for trusted tasks since Bash runs with the host process's permissions. Install Git Bash for Bash tools on Windows. Use Docker for tasks that need container isolation.
 
 For images and PDF pages, declare `image` in the service's `inputModalities`. For native PDFs, declare `pdf` and use an endpoint that accepts PDF input. Each attempt saves redacted session events, the Evaluator trajectory, and stderr under `agent/`. See [image and PDF evaluations](multimodal.md).
 
 ## TRAE CLI
+
+This TRAE version sends its native `model_reasoning_effort` setting over Chat Completions. To set the service’s `reasoningEffort` explicitly, use `api: openai-completions`. For Responses and Messages, omit the field.
 
 TRAE's native WebFetch works independently of MCP. Native search needs working credentials. Setting `mcp: disabled` removes the evaluator's supplementary Exa service.
 
@@ -318,6 +326,8 @@ output:
 - Set `inputModalities: [text, image]` for images and PDF `pages` attachments. Use pages mode for PDFs. Each attempt saves redacted session events, the Evaluator trajectory, and stderr under `agent/`. See [image and PDF evaluations](multimodal.md).
 
 ## CodeBuddy Code
+
+An explicit service `reasoningEffort` sets the main agent’s effort through the native `--effort` flag. The CLI resolves the setting against the model’s supported levels and selects the effort for subagents and auxiliary requests.
 
 Version 2.183.0 uses a pinned patch so `skills: disabled` disables project and plugin skills. The same plugin's MCP tools remain available when `mcp` is left at its default.
 
@@ -396,7 +406,7 @@ run:
 
 `maxTokens` sets the per-response output cap, `maxTurns` sets the native step limit, and `run.solveTimeoutSeconds` sets the task deadline. At limits of 1 and 2, Qwen, Kimi, MiniMax, and OpenCode issued 1 and 2 main-agent requests respectively. Omitted solver limits use the service settings and CLI defaults. MiniMax custom models default to 16,384 output tokens. Kimi omits its native output cap on Chat requests, so Evaluator applies an explicit `maxTokens` at the relay. Unknown custom models in Kimi and MiniMax default to a 200,000-token window. Set `contextWindow` for the actual service capacity.
 
-All four select Chat Completions, Responses, or Messages from the selected service's `api`. Explicit service `reasoningEffort` overrides native defaults and model-name inference. Real model credentials remain in the relay process; child CLIs receive a temporary local token. Qwen, Kimi, and OpenCode receive initial images over native ACP; MiniMax uses native `exec --file`. OpenCode transmits original PDFs over all three APIs. Qwen supports original PDFs on Chat Completions and Messages, and requires pages on Responses. Kimi drops binary ACP resources. MiniMax sends a file reference without the PDF bytes. Use pages mode for these two CLIs. Task skill directories and MCP servers are passed to the selected CLI when enabled.
+All four select Chat Completions, Responses, or Messages from the selected service's `api`. An explicit service `reasoningEffort` selects a native session effort in Qwen Code, Kimi Code and OpenCode. MiniMax Code receives it through its native `--effort` flag. The CLI decides how the selected effort is encoded and whether secondary requests inherit it. Qwen Code's native selector starts at `low`. Real model credentials remain in the relay process; child CLIs receive a temporary local token. Qwen, Kimi, and OpenCode receive initial images over native ACP; MiniMax uses native `exec --file`. OpenCode transmits original PDFs over all three APIs. Qwen supports original PDFs on Chat Completions and Messages, and requires pages on Responses. Kimi drops binary ACP resources. MiniMax sends a file reference without the PDF bytes. Use pages mode for these two CLIs. Task skill directories and MCP servers are passed to the selected CLI when enabled.
 
 When built-in tools are disabled, CLI model requests retain only registered MCP tool declarations. Evaluator also skips its automatic search fallback. Search tools provided by a task’s MCP servers follow the MCP setting and the task’s network policy.
 

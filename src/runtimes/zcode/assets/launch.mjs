@@ -17,7 +17,10 @@ try {
   const none = toolPolicy.tools === "none";
   resources = await taskServers(input);
   if (toolPolicy.skills !== "disabled") await stageSkills(input.skillsDirectories, join(home, ".agents", "skills"));
-  relay = await startModelRelay({ completeSearch: resources.completeSearch, api, baseUrl, apiKey, token, reasoningEffort, disableHostedSearch: toolPolicy.webSearch === "disabled", disableMcp: toolPolicy.mcp === "disabled", disableBuiltinTools: none });
+  relay = await startModelRelay({
+    completeSearch: resources.completeSearch, api, baseUrl, apiKey, token,
+    disableHostedSearch: toolPolicy.webSearch === "disabled", disableMcp: toolPolicy.mcp === "disabled", disableBuiltinTools: none,
+  });
   await mkdir(settings, { recursive: true, mode: 0o700 });
   const providerFile = join(home, "provider_config.json");
   const providerId = "arsi-evaluator";
@@ -47,7 +50,8 @@ try {
         }],
         manualProviderModelRules: [],
       },
-      defaultModelSelection: { providerId, modelId: model },
+      defaultModelSelection: { providerId, modelId: model,
+        ...(reasoningEffort === undefined ? {} : { options: { reasoningLevel: reasoningEffort } }) },
     },
   }), { mode: 0o600 });
   await writeFile(join(settings, "config.json"), JSON.stringify({

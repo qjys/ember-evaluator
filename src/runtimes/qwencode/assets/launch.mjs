@@ -10,12 +10,18 @@ await launchCodeCli({
     const protocol = api === "anthropic-messages" ? "anthropic" : "openai";
     const generationConfig = { modalities: { image: supportsImages, ...(supportsPdf ? { pdf: true } : {}) },
       ...(contextWindow === undefined ? {} : { contextWindowSize: contextWindow }),
-      ...(maxTokens === undefined ? {} : { samplingParams: { max_tokens: maxTokens } }),
-      ...(reasoningEffort === undefined ? {} : { reasoning: { effort: reasoningEffort } }) };
+      ...(maxTokens === undefined ? {} : { samplingParams: { max_tokens: maxTokens } }) };
+    const profile = { "openai-completions": "openai-effort", "openai-responses": "openai-reasoning",
+      "anthropic-messages": "anthropic-adaptive" }[api];
     const config = { security: { auth: { selectedType: protocol } }, model: { name: model, generationConfig,
       ...(maxTurns === undefined ? {} : { maxSessionTurns: maxTurns }) },
       modelProviders: { [protocol]: [{ id: model, baseUrl: api === "anthropic-messages" ? endpoint.replace(/\/v1$/u, "") : endpoint, envKey: "EVALUATOR_MODEL_TOKEN",
-        ...(api === "openai-responses" ? { wireApi: "responses" } : {}), generationConfig }] },
+        ...(api === "openai-responses" ? { wireApi: "responses" } : {}),
+        ...(reasoningEffort === undefined ? {} : {
+          // A custom route needs a capability declaration before the native session selector is available.
+          // Keep this model default independent of the current session's effort.
+          capabilities: { reasoning: { profile, efforts: ["low", "medium", "high", "xhigh", "max"], defaultEffort: "high" } },
+        }), generationConfig }] },
       ...(toolPolicy.mcp === "disabled" ? { mcp: { allowed: [] } } : {}),
       ...(toolPolicy.skills === "disabled" ? { skills: { disabledLevels: ["project", "user", "extension", "bundled"] } } : {}),
       tools: { sandbox: false, ...(toolPolicy.tools === "none" ? { toolSearch: { enabled: false } } : {}),
@@ -47,7 +53,7 @@ await launchCodeCli({
       if (toolPolicy.webSearch === "disabled") deny.push("web_search");
       if (toolPolicy.webFetch === "disabled") deny.push("web_fetch");
     }
-    return { skillsDir: join(env.QWEN_HOME, "skills"), async beforePrompt(send, sessionId) {
+    return { skillsDir: join(env.QWEN_HOME, "skills"), effortConfigId: "reasoning_effort", async beforePrompt(send, sessionId) {
       if (toolPolicy.tools !== "none" || toolPolicy.mcp === "disabled") return;
       // Qwen returns session/new before it has finished registering MCP tools.
       for (;;) {

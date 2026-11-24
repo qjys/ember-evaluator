@@ -25,7 +25,6 @@ export async function zcodeRuntimeInstallation(signal: AbortSignal): Promise<Run
       ...["package.json", "package-lock.json", "source-lock.json", "install.mjs", "launch.mjs", "cli.mjs"]
         .map(target => ({ source: fileURLToPath(new URL(`./assets/${target}`, import.meta.url)), target })),
       { source: fileURLToPath(new URL("../shared/assets/model-relay.mjs", import.meta.url)), target: "runtimes/shared/assets/model-relay.mjs" },
-      { source: fileURLToPath(new URL("../../infrastructure/models/reasoning-effort.mjs", import.meta.url)), target: "infrastructure/models/reasoning-effort.mjs" },
       { source: fileURLToPath(new URL("../shared/assets/stage-attachments.mjs", import.meta.url)), target: "stage-attachments.mjs" },
     ],
     commands: [

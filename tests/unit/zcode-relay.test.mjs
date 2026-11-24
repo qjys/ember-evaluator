@@ -3,41 +3,6 @@ import { expect, test } from "vitest";
 import { startModelRelay } from "../../src/runtimes/shared/assets/model-relay.mjs";
 import { applyReasoningEffort } from "../../src/infrastructure/models/reasoning-effort.mjs";
 
-test.each([
-  ["openai-completions", "/chat/completions", { reasoning_effort: "low", thinking: { type: "disabled" }, enable_thinking: false },
-    { reasoning_effort: "max", thinking: { type: "enabled" }, enable_thinking: true }],
-  ["openai-responses", "/responses", { reasoning: { effort: "low", summary: "auto" } },
-    { reasoning: { effort: "max", summary: "auto" } }],
-  ["anthropic-messages", "/messages", { thinking: { type: "enabled", budget_tokens: 1024 }, output_config: { effort: "high", format: { type: "json_schema" } } },
-    { thinking: { type: "adaptive" }, output_config: { effort: "max", format: { type: "json_schema" } } }],
-])("model relay overrides %s defaults in every request and retains model errors", async (api, route, defaults, expected) => {
-  const received = [];
-  const upstream = createServer(async (req, res) => {
-    let body = "";
-    for await (const chunk of req) body += chunk;
-    received.push(JSON.parse(body));
-    res.writeHead(400, { "content-type": "application/json" }).end('{"error":{"message":"unsupported effort"}}');
-  });
-  await new Promise(resolve => upstream.listen(0, "127.0.0.1", resolve));
-  const relay = await startModelRelay({ api, baseUrl: `http://127.0.0.1:${upstream.address().port}/v1`,
-    apiKey: "upstream-fixture", token: "local-fixture", reasoningEffort: "max" });
-  try {
-    const headers = api === "anthropic-messages" ? { "x-api-key": "local-fixture" } : { authorization: "Bearer local-fixture" };
-    for (let round = 0; round < 2; round++) {
-      const auth = api === "anthropic-messages" && round === 1 ? { authorization: "Bearer local-fixture" } : headers;
-      const result = await fetch(relay.endpoint + route, { method: "POST", headers: { ...auth, "content-type": "application/json" },
-        body: JSON.stringify({ model: "fixture", ...defaults }) });
-      expect(result.status).toBe(400);
-      expect(await result.json()).toEqual({ error: { message: "unsupported effort" } });
-    }
-    expect(received).toEqual([{ model: "fixture", ...expected }, { model: "fixture", ...expected }]);
-  } finally {
-    relay.close();
-    upstream.closeAllConnections();
-    await new Promise(resolve => upstream.close(resolve));
-  }
-});
-
 test("reasoning overrides preserve other fields and leave the original payload untouched", () => {
   const source = { reasoning_effort: "low", chat_template_kwargs: { reasoning_effort: "low", enable_thinking: false, other: 1 } };
   expect(applyReasoningEffort(source, "openai-completions", "max")).toEqual({

@@ -39,7 +39,7 @@ try {
   // mode. Keep the real credential in this relay on every operating system.
   relay = await startModelRelay({ disableHostedSearch: input.toolPolicy?.webSearch === "disabled",
     disableMcp: input.toolPolicy?.mcp === "disabled", disableBuiltinTools: input.toolPolicy?.tools === "none", api: "anthropic-messages", baseUrl,
-    apiKey, token: relayKey, reasoningEffort });
+    apiKey, token: relayKey });
   if (needsShellPrefix) {
     // The CLI passes the entire Bash command as one argument to the prefix.
     await writeFile(shellPrefix, '#!/bin/sh\nunset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN ANTHROPIC_BASE_URL\nexec /bin/bash -c "$1"\n',
@@ -58,6 +58,10 @@ try {
       ANTHROPIC_DEFAULT_OPUS_MODEL: model, ANTHROPIC_DEFAULT_SONNET_MODEL: model, ANTHROPIC_DEFAULT_HAIKU_MODEL: model,
       CLAUDE_CODE_SUBAGENT_MODEL: model, CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST: "1",
       CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+      ...(reasoningEffort === undefined ? {} : {
+        ANTHROPIC_CUSTOM_MODEL_OPTION: model,
+        ANTHROPIC_CUSTOM_MODEL_OPTION_SUPPORTED_CAPABILITIES: "effort,xhigh_effort,max_effort,thinking,adaptive_thinking",
+      }),
       ...(policy.tools === "none" ? { ENABLE_TOOL_SEARCH: "false" } : {}),
       NO_PROXY: noProxy, no_proxy: noProxy,
       ...(needsShellPrefix ? { CLAUDE_CODE_SHELL_PREFIX: shellPrefix } : {}),

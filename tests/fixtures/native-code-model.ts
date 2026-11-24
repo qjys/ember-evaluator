@@ -3,9 +3,14 @@ import { createServer } from "node:http";
 type Tool = { type: string; name?: string; function?: { name: string; parameters?: { properties?: Record<string, unknown> } }; input_schema?: { properties?: Record<string, unknown> } };
 export type CapturedCodeRequest = { model: string; tools?: Tool[]; messages?: unknown[]; input?: unknown; max_tokens?: number; max_completion_tokens?: number; max_output_tokens?: number; reasoning_effort?: string; reasoning?: unknown; output_config?: unknown; thinking?: unknown; stream?: boolean };
 
-export async function nativeCodeModel(mode: "answer" | "read" | "loop" | "discover-fetch" = "answer", hostname = "127.0.0.1", filePath = "input.txt") {
+export async function nativeCodeModel(mode: "answer" | "read" | "loop" | "discover-fetch" | "fetch" = "answer", hostname = "127.0.0.1", filePath = "input.txt") {
   const requests: CapturedCodeRequest[] = [];
   const server = createServer(async (request, response) => {
+    if (mode === "fetch" && request.method === "GET" && request.url === "/fixture-page") {
+      response.setHeader("content-type", "text/html");
+      response.end("<html><body><h1>Local webfetch evidence</h1></body></html>");
+      return;
+    }
     let source = "";
     for await (const chunk of request) source += chunk;
     const body = JSON.parse(source) as CapturedCodeRequest;
@@ -20,15 +25,27 @@ export async function nativeCodeModel(mode: "answer" | "read" | "loop" | "discov
     const properties = read?.function?.parameters?.properties ?? read?.input_schema?.properties ?? {};
     const path = ["file_path", "path", "filePath"].find(key => key in properties) ?? "path";
     let args = JSON.stringify({ [path]: filePath });
-    if (mode === "discover-fetch") {
-      const visible = tools.some(tool => /^(?:web_fetch|webfetch|FetchURL)$/u.test(tool.function?.name ?? tool.name ?? ""));
+    let fetching = false;
+    if (mode === "discover-fetch" || mode === "fetch") {
+      const webFetch = tools.find(tool => /^(?:web_fetch|webfetch|FetchURL)$/u.test(tool.function?.name ?? tool.name ?? ""));
       const results = JSON.stringify((body.messages ?? []).filter(item => typeof item === "object" && item !== null && "role" in item && item.role === "tool"));
-      target = tools.find(tool => (tool.function?.name ?? tool.name) === "tool_search");
-      call = !visible && target !== undefined && !results.includes("web_fetch");
-      args = JSON.stringify({ query: "select:web_fetch" });
+      const deferred = results.includes("web_fetch") ? tools.find(tool => (tool.function?.name ?? tool.name) === "tool_call") : undefined;
+      if (mode === "fetch" && (webFetch || deferred) && !history.includes("call_fixture_fetch")) {
+        const local = server.address();
+        if (!local || typeof local === "string") throw Error("Missing mock server address");
+        target = webFetch ?? deferred;
+        call = true;
+        fetching = true;
+        const fetchArgs = { url: "http://127.0.0.1:" + local.port + "/fixture-page", prompt: "Extract the heading." };
+        args = JSON.stringify(webFetch ? fetchArgs : { name: "web_fetch", arguments: fetchArgs });
+      } else {
+        target = tools.find(tool => (tool.function?.name ?? tool.name) === "tool_search");
+        call = !webFetch && target !== undefined && !results.includes("web_fetch");
+        args = JSON.stringify({ query: "select:web_fetch" });
+      }
     }
-    const callId = `call_fixture_${requests.length}`;
     const name = target?.function?.name ?? target?.name;
+    const callId = fetching ? "call_fixture_fetch" : `call_fixture_${requests.length}`;
     const answer = "The answer is 42.";
     response.writeHead(200, { "content-type": "text/event-stream" });
     const send = (event: object, type?: string) => response.write(`${type ? `event: ${type}\n` : ""}data: ${JSON.stringify(event)}\n\n`);

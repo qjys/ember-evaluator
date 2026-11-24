@@ -19,7 +19,6 @@ export async function codeBuddyRuntimeInstallation(signal: AbortSignal): Promise
         source: fileURLToPath(new URL(`./assets/${target}`, import.meta.url)), target,
       })),
       { source: fileURLToPath(new URL("../shared/assets/model-relay.mjs", import.meta.url)), target: "runtimes/shared/assets/model-relay.mjs" },
-      { source: fileURLToPath(new URL("../../infrastructure/models/reasoning-effort.mjs", import.meta.url)), target: "infrastructure/models/reasoning-effort.mjs" },
     ],
     commands: [{ executable: "npm", args: ["ci", "--omit=dev", "--ignore-scripts", "--no-audit", "--no-fund"] }, patch.command],
     probes: [{

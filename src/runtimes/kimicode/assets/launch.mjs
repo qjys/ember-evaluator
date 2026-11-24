@@ -26,12 +26,11 @@ await launchCodeCli({
       `model = ${JSON.stringify(model)}`, `max_context_size = ${contextWindow ?? 200000}`,
       ...(maxTokens === undefined ? [] : [`max_output_size = ${maxTokens}`]),
       `capabilities = ${JSON.stringify(["tool_use", ...(supportsImages ? ["image_in"] : []), ...(reasoningEffort === undefined ? [] : ["thinking"])])}`,
-      ...(reasoningEffort === undefined ? [] : [`support_efforts = ${JSON.stringify([reasoningEffort])}`, `default_effort = ${JSON.stringify(reasoningEffort)}`,
-        '[thinking]', 'enabled = true', `effort = ${JSON.stringify(reasoningEffort)}`]),
+      ...(reasoningEffort === undefined ? [] : [`support_efforts = ${JSON.stringify([reasoningEffort])}`]),
       '[tools]', tools, ...(maxTurns === undefined ? [] : ['[loop_control]', `max_steps_per_turn = ${maxTurns}`]),
     ].join("\n") + "\n";
     await writeFile(join(env.KIMI_CODE_HOME, "config.toml"), config, { mode: 0o600 });
-    return { args: ["acp"], modeId: "yolo" };
+    return { args: ["acp"], modeId: "yolo", effortConfigId: "thinking" };
   },
   run: acpRun,
 });

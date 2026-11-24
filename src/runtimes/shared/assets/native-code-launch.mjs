@@ -49,7 +49,9 @@ export async function launchCodeCli({ entry, native = false, enforceMaxTurns = f
   let options;
   try {
     resources = await taskServers(input, entry.includes("opencode-ai"));
-    relay = await startModelRelay({ ...input, completeSearch: resources.completeSearch, disableBuiltinTools: input.toolPolicy.tools === "none", disableMcp: input.toolPolicy.mcp === "disabled",
+    relay = await startModelRelay({
+      api: input.api, baseUrl: input.baseUrl, apiKey: input.apiKey, token: input.token, maxTokens: input.maxTokens,
+      completeSearch: resources.completeSearch, disableBuiltinTools: input.toolPolicy.tools === "none", disableMcp: input.toolPolicy.mcp === "disabled",
       isMcpTool: name => options?.isMcpTool ? options.isMcpTool(name) : name.startsWith("mcp__"),
       disableHostedSearch: input.toolPolicy.webSearch === "disabled",
       disableWebFetch: input.toolPolicy.webFetch === "disabled", captureUsage: true,
@@ -185,6 +187,9 @@ export async function acpRun({ child, exited, input, options }) {
     }
     const { sessionId } = await send("session/new", { cwd: process.cwd(), mcpServers });
     if (options.modeId) await send("session/set_mode", { sessionId, modeId: options.modeId });
+    if (options.effortConfigId && input.reasoningEffort !== undefined) {
+      await send("session/set_config_option", { sessionId, configId: options.effortConfigId, value: input.reasoningEffort });
+    }
     await options.beforePrompt?.(send, sessionId);
     const result = await send("session/prompt", { sessionId, prompt: [
       { type: "text", text: input.prompt }, ...attachments,

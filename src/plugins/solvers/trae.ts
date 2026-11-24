@@ -50,6 +50,9 @@ export class TraeSolver implements Solver {
     if (wireApi === undefined) {
       throw new TypeError("trae requires api: openai-completions, openai-responses or anthropic-messages on its selected service");
     }
+    if (model.reasoningEffort !== undefined && api !== "openai-completions") {
+      throw new TypeError("The locked TRAE CLI supports native reasoningEffort only with api: openai-completions.");
+    }
     this.wireApi = wireApi;
     this.endpoint = apiBase(model.endpoint);
     if (model.maxTokens !== undefined || model.retry !== undefined) {
@@ -86,10 +89,10 @@ export class TraeSolver implements Solver {
     }
     const mapping = session.modelEndpoint;
     const endpoint = mapping?.originEndpoint === model.endpoint ? apiBase(mapping.baseUrl) : this.endpoint;
-    // The locked CLI only applies its effort setting to Chat Completions.
     const effort = model.reasoningEffort;
-    const relay = policy.tools === "none" || policy.webSearch === "disabled" || effort !== undefined && model.api !== "openai-completions"
-      ? { api: model.api, baseUrl: endpoint, reasoningEffort: effort, disableHostedSearch: policy.webSearch === "disabled", disableBuiltinTools: policy.tools === "none", disableMcp: policy.mcp === "disabled" } : undefined;
+    const relay = policy.tools === "none" || policy.webSearch === "disabled"
+      ? { disableHostedSearch: policy.webSearch === "disabled", disableBuiltinTools: policy.tools === "none", disableMcp: policy.mcp === "disabled" }
+      : undefined;
     const local = runtime.persistent;
     const path = local ? join : posix.join;
     const home = path(runtime.stateRoot, `attempt-${randomUUID()}`);
@@ -109,7 +112,7 @@ export class TraeSolver implements Solver {
       ...(relay ? [] : [`model_providers.arsi-evaluator.base_url=${JSON.stringify(endpoint)}`]),
       'model_providers.arsi-evaluator.env_key="EVALUATOR_TRAE_API_KEY"',
       `model_providers.arsi-evaluator.wire_api=${JSON.stringify(this.wireApi)}`,
-      ...(effort === undefined || relay ? [] : [`model_reasoning_effort=${JSON.stringify(effort)}`]),
+      ...(effort === undefined ? [] : [`model_reasoning_effort=${JSON.stringify(effort)}`]),
     ];
     const denied = policy.tools === "none" ? TRAE_TOOLS : [
       ...(policy.subagent === "disabled" ? ["Agent", "ListAgents", "SendMessage"] : []),

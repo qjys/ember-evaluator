@@ -17,7 +17,6 @@ export async function traeRuntimeInstallation(signal: AbortSignal): Promise<Runt
       })),
       { source: fileURLToPath(new URL("../shared/assets/stage-attachments.mjs", import.meta.url)), target: "stage-attachments.mjs" },
       { source: fileURLToPath(new URL("../shared/assets/model-relay.mjs", import.meta.url)), target: "runtimes/shared/assets/model-relay.mjs" },
-      { source: fileURLToPath(new URL("../../infrastructure/models/reasoning-effort.mjs", import.meta.url)), target: "infrastructure/models/reasoning-effort.mjs" },
     ],
     commands: [{ executable: "node", args: ["install.mjs"], env: { NODE_USE_ENV_PROXY: "1" } }],
     probes: [{

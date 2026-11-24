@@ -3,16 +3,19 @@ import { spawnSync } from "node:child_process";
 
 await launchCodeCli({
   entry: "node_modules/opencode-ai/bin/opencode.exe", native: true, enforceMaxTurns: true,
-  async configure({ executable, servers, endpoint, env, api, model, token, maxTokens, contextWindow, maxTurns, supportsImages, supportsPdf, toolPolicy }) {
+  async configure({ executable, servers, endpoint, env, api, model, token, maxTokens, contextWindow, reasoningEffort, maxTurns, supportsImages, supportsPdf, toolPolicy }) {
     const permission = toolPolicy.tools === "none" ? { "*": "deny" } : { "*": "allow",
       ...(toolPolicy.subagent === "disabled" ? { task: "deny" } : {}),
       ...(toolPolicy.skills === "disabled" ? { skill: "deny" } : {}),
       ...(toolPolicy.webSearch === "disabled" ? { websearch: "deny", search: "deny" } : {}),
       ...(toolPolicy.webFetch === "disabled" ? { webfetch: "deny", fetch: "deny" } : {}) };
     const npm = api === "anthropic-messages" ? "@ai-sdk/anthropic" : api === "openai-responses" ? "@ai-sdk/openai" : "@ai-sdk/openai-compatible";
+    const variant = api === "anthropic-messages" ? { effort: reasoningEffort, thinking: { type: "adaptive" } }
+      : { reasoningEffort };
     env.OPENCODE_CONFIG_CONTENT = JSON.stringify({ model: `evaluator/${model}`, small_model: `evaluator/${model}`,
       provider: { evaluator: { npm, options: { apiKey: token, baseURL: endpoint }, models: { [model]: {
         id: model, name: model, attachment: Boolean(supportsImages || supportsPdf), tool_call: true,
+        ...(reasoningEffort === undefined ? {} : { variants: { [reasoningEffort]: variant } }),
         ...(maxTokens === undefined && contextWindow === undefined ? {} : { limit: { context: contextWindow ?? 200000, output: maxTokens ?? 32000 } }),
         modalities: { input: ["text", ...(supportsImages ? ["image"] : []), ...(supportsPdf ? ["pdf"] : [])], output: ["text"] },
       } } } },
@@ -42,7 +45,7 @@ await launchCodeCli({
       settings.permission = settings.agent.build.permission = permission;
       env.OPENCODE_CONFIG_CONTENT = JSON.stringify(settings);
     }
-    return { args: ["acp"], modeId: "build", nativeSearchUsesExa: true,
+    return { args: ["acp"], modeId: "build", nativeSearchUsesExa: true, effortConfigId: "effort",
       isMcpTool: name => name !== "apply_patch" && prefixes.some(prefix => name.startsWith(prefix)) };
   },
   run: acpRun,

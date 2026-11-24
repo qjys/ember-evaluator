@@ -43,6 +43,9 @@ export class NativeCodeSolver implements Solver {
       throw new TypeError(`${name} requires api: openai-completions, openai-responses or anthropic-messages`);
     }
     if (model.retry !== undefined) throw new TypeError(`${name} does not support services.*.retry`);
+    if (name === "qwencode" && model.reasoningEffort === "minimal") {
+      throw new TypeError("Qwen Code does not offer reasoningEffort: minimal. Use low, medium, high, xhigh, or max.");
+    }
     this.endpoint = apiBase(model.endpoint);
   }
 

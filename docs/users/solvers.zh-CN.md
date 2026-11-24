@@ -189,6 +189,8 @@ benchmark:
 
 ## 使用 Codex
 
+服务的 `reasoningEffort` 映射到 Codex 原生的 `model_reasoning_effort`。
+
 Codex 保留 `exec` 入口。评测器通过进程内的本地 MCP 提供独立的 `web_fetch`，可在关闭搜索时读取网页正文。关闭抓取会同时撤下 Codex 自带的搜索和打开网页组合工具，此时仍开放的搜索只使用 Exa，返回来源 URL。`mcp: disabled` 会停止补充 MCP；此时显式开启独立抓取，或显式要求开启搜索并关闭抓取，都会在启动前报错。`tools: none` 同时移除补充搜索和抓取，自行声明的 MCP 仍按 `mcp` 开关执行。
 
 `codex` 在本机或 Docker 的任务目录运行 Codex CLI。Evaluator 在首次准备时安装固定版本 `0.167.0`，认证来自所选模型服务。将以下配置保存为实验 YAML，设置 `CODEX_MODEL`、`CODEX_ENDPOINT` 和 `CODEX_API_KEY` 后运行。
@@ -217,6 +219,8 @@ output:
 - 使用图片或 `pages` 模式的 PDF 时，在模型服务中设置 `inputModalities: [text, image]`。Codex 会把两种附件都作为图片发送。每次 attempt 的 `agent/` 保存 Codex 事件、Evaluator 轨迹和 stderr。见[图片与 PDF 评测](multimodal.zh-CN.md)。
 
 ## 使用 Claude Code
+
+服务中显式设置的 `reasoningEffort` 通过原生 `--effort` 设置主 Agent 的档位。CLI 根据模型支持的档位解析该选项，并按原生规则为子 Agent 和工具辅助请求选择档位。
 
 当任务网络允许抓取时，Claude Code 默认向主 Agent 和子 Agent 开放原生 WebFetch，并设置 `skipWebFetchPreflight` 跳过 Anthropic 的域名安全名单查询。任务使用 `none`、`model-api` 网络，或配置 `webFetch: disabled`、`tools: none` 时，会移除 WebFetch。
 
@@ -279,11 +283,15 @@ output:
 
 `base_url` 使用接口基地址。Chat Completions 或 Responses 通常填写以 `/v1` 结尾的地址。还可设置 `api: openai-responses` 或 `api: anthropic-messages`。此 Solver 不接受服务字段 `retry`。
 
+服务的 `reasoningEffort` 写入 ZCode 原生模型选择中的 `reasoningLevel`。ZCode 根据模型能力解析该档位，并按原生规则为 WebFetch、WebSearch 和后台辅助请求选择档位。
+
 本机和 Docker 都开放 Bash。本机 Bash 具有宿主进程权限，只用于可信任务。Windows 下使用 Bash 工具需要安装 Git Bash。任务需要容器隔离时使用 Docker。
 
 图片和 PDF 页图需要在模型服务的 `inputModalities` 声明 `image`。原生 PDF 需要声明 `pdf`，并使用接收 PDF 的模型服务。每次 attempt 在 `agent/` 下保存脱敏的会话事件、轨迹和 stderr。见[图片与 PDF 评测](multimodal.zh-CN.md)。
 
 ## 使用 TRAE CLI
+
+当前 TRAE 版本通过原生 `model_reasoning_effort` 为 Chat Completions 设置档位。如需显式设置服务的 `reasoningEffort`，请使用 `api: openai-completions`。Responses 和 Messages 可省略该字段。
 
 TRAE 的原生 WebFetch 可独立于 MCP 使用。原生搜索需要可用的认证；`mcp: disabled` 会移除评测器补充的 Exa 搜索服务。
 
@@ -318,6 +326,8 @@ output:
 - 使用图片或 PDF `pages` 附件时，在服务中设置 `inputModalities: [text, image]`。PDF 使用页图模式。每次 attempt 在 `agent/` 下保存脱敏的会话事件、Evaluator 轨迹和 stderr。见[图片与 PDF 评测](multimodal.zh-CN.md)。
 
 ## 使用 CodeBuddy Code
+
+服务中显式设置的 `reasoningEffort` 通过原生 `--effort` 设置主 Agent 的档位。CLI 根据模型支持的档位解析该选项，并按原生规则为子 Agent 和工具辅助请求选择档位。
 
 2.183.0 使用锁定版本补丁，使 `skills: disabled` 同时关闭项目和插件技能。同一插件的 MCP 仍可在 `mcp` 缺省时运行。
 
@@ -398,7 +408,7 @@ run:
 
 `maxTokens` 控制单次回复的输出，`maxTurns` 设置原生步数，`solveTimeoutSeconds` 设置整题时限。Qwen、Kimi、MiniMax 和 OpenCode 的 1 轮与 2 轮对照分别产生 1 次和 2 次主 Agent 请求。省略 Solver 限额时沿用服务配置和 CLI 默认值。MiniMax 自定义模型默认单次输出上限为 16,384 token。Kimi 的原生 Chat 配置不发送输出上限，Evaluator 在模型转发入口补上显式 `maxTokens`。Kimi 和 MiniMax 的未知自定义模型默认使用 200,000 token 上下文，可通过 `contextWindow` 指定服务实际容量。
 
-四者均按所选服务的 `api` 选择协议；服务 `reasoningEffort` 优先于 CLI 默认档位，并在实际模型请求中再次应用，避免被 CLI 的模型名称推断改写。模型 key 只留在转发进程，子 CLI 使用临时本地令牌。Qwen、Kimi、OpenCode 使用原生 ACP 输入图片，MiniMax 使用原生 `exec --file`。OpenCode 三种协议均可传原始 PDF。Qwen 的 Chat Completions 和 Messages 可传原始 PDF，Responses 使用页图。Kimi 的 ACP 会丢弃二进制资源，MiniMax 的 `--file` 对 PDF 只发送路径说明，这两者使用页图。默认将任务提供的技能目录和 MCP 服务传给所选 CLI。
+四者均按所选服务的 `api` 选择协议；显式设置服务 `reasoningEffort` 时，Qwen Code、Kimi Code 和 OpenCode 通过各自的原生会话设置选择档位，MiniMax Code 使用原生 `--effort`。请求格式以及辅助请求是否继承档位均由 CLI 决定。Qwen Code 原生可选的最低档位是 `low`。模型 key 只留在转发进程，子 CLI 使用临时本地令牌。Qwen、Kimi、OpenCode 使用原生 ACP 输入图片，MiniMax 使用原生 `exec --file`。OpenCode 三种协议均可传原始 PDF。Qwen 的 Chat Completions 和 Messages 可传原始 PDF，Responses 使用页图。Kimi 的 ACP 会丢弃二进制资源，MiniMax 的 `--file` 对 PDF 只发送路径说明，这两者使用页图。默认将任务提供的技能目录和 MCP 服务传给所选 CLI。
 
 关闭内置工具时，CLI 模型请求只保留已注册的 MCP 工具声明。评测器也停止自动添加补充搜索，但任务自己声明的搜索 MCP 仍由 `mcp` 控制。任务的网络策略继续生效。
 

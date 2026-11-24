@@ -14,7 +14,6 @@ export async function codexRuntimeInstallation(signal: AbortSignal): Promise<Run
       ...taskResourceFiles(),
       { source: fileURLToPath(new URL("../shared/assets/codex-skill-config.mjs", import.meta.url)), target: "codex-skill-config.mjs" },
       { source: fileURLToPath(new URL("../shared/assets/model-relay.mjs", import.meta.url)), target: "runtimes/shared/assets/model-relay.mjs" },
-      { source: fileURLToPath(new URL("../../infrastructure/models/reasoning-effort.mjs", import.meta.url)), target: "infrastructure/models/reasoning-effort.mjs" },
       ...["package.json", "package-lock.json", "launch.mjs", "web-fetch.mjs"].map(target => ({
         source: fileURLToPath(new URL(`./assets/${target}`, import.meta.url)), target,
       })),

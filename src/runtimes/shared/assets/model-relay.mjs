@@ -2,7 +2,6 @@ import { createServer } from "node:http";
 import { text } from "node:stream/consumers";
 import { pipeline } from "node:stream/promises";
 import { Transform } from "node:stream";
-import { applyReasoningEffort } from "../../../infrastructure/models/reasoning-effort.mjs";
 
 const routes = {
   "openai-completions": ["/chat/completions"],
@@ -77,7 +76,7 @@ function toolResponseGuard(allowed) {
   };
 }
 
-export async function startModelRelay({ api, baseUrl, apiKey, token, reasoningEffort, maxTokens, disableBuiltinTools = false, disableMcp = false, isMcpTool = name => name.startsWith("mcp__"), disableHostedSearch = false, disableWebFetch = false, completeSearch, captureUsage = false, maxModelCalls }) {
+export async function startModelRelay({ api, baseUrl, apiKey, token, maxTokens, disableBuiltinTools = false, disableMcp = false, isMcpTool = name => name.startsWith("mcp__"), disableHostedSearch = false, disableWebFetch = false, completeSearch, captureUsage = false, maxModelCalls }) {
   const anthropic = api === "anthropic-messages";
   const base = anthropic && !baseUrl.endsWith("/v1") ? baseUrl + "/v1" : baseUrl;
   const totals = { inputTokens: 0, outputTokens: 0, reported: false };
@@ -106,9 +105,9 @@ export async function startModelRelay({ api, baseUrl, apiKey, token, reasoningEf
       let body = request;
       let guard;
       let observeSearchResponse;
-      if (disableBuiltinTools || disableHostedSearch || disableWebFetch || completeSearch || (route !== "/messages/count_tokens" && (reasoningEffort !== undefined || maxTokens !== undefined))) {
-        let payload = JSON.parse(await text(request));
-        if (reasoningEffort !== undefined && route !== "/messages/count_tokens") payload = applyReasoningEffort(payload, api, reasoningEffort);
+      if (disableBuiltinTools || disableHostedSearch || disableWebFetch || completeSearch ||
+          (maxTokens !== undefined && route !== "/messages/count_tokens")) {
+        const payload = JSON.parse(await text(request));
         if (maxTokens !== undefined && route !== "/messages/count_tokens") {
           const key = api === "openai-responses" ? "max_output_tokens" : api === "openai-completions" && payload.max_completion_tokens !== undefined ? "max_completion_tokens" : "max_tokens";
           delete payload.max_tokens;

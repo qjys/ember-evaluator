@@ -21,7 +21,6 @@ export async function nativeCodeInstallation(name: NativeCodeName, signal: Abort
       })),
       ...taskResourceFiles(),
       ...(patch?.files ?? []),
-      { source: fileURLToPath(new URL("../../infrastructure/models/reasoning-effort.mjs", import.meta.url)), target: "infrastructure/models/reasoning-effort.mjs" },
     ],
     commands: [
       { executable: "npm", args: ["ci", "--omit=dev", "--ignore-scripts", "--no-audit", "--no-fund"] },
