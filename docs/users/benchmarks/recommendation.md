@@ -52,6 +52,10 @@ The report shows per-group server times, five shares of span and the dominant se
 
 For standard fast runs L=128 must have a nonzero shared-prefix forward ratio. The historical verdict uses the budget version saved with the run. L=128 and the all-five gate are reported separately. The 910B1 graph figures are cross-machine references. Custom workloads have no historical gate. Offline reports for older runs leave unavailable measurements blank, including the formal wall window.
 
+## Single endpoint for performance and operator profiling
+
+Start SGLang-GR once and set `services.default.base_url` in the [single-service playbook](../../../playbook/recommendation/north-star-profile.yaml). Both collections select the same service. Run `arsi-evaluator run playbook/recommendation/north-star-profile.yaml`. All five ordinary performance windows finish before the first profiling window on that endpoint. The profiled requests are excluded from E2E statistics. The parent report includes both collections. Reserve the service for this run because profiling controls are process-wide. Ensure the server can write trace files at the absolute paths visible to the evaluator.
+
 ## Performance and operator profiling in one run
 
 Use [north-star-collections.yaml](../../../playbook/recommendation/north-star-collections.yaml) to route the same locked inputs to two externally started instances of the same GR build and model. Set the same base or fast options on both. The performance service listens on port 30000. Launch the profiling service with the same model and engine flags on port 30001 and set `SGLANG_NPU_PROFILE_AUTO_EXPORT=1` **before** starting its Python process. The gr-a2 client requests CPU and NPU activities with `POST /start_profile`; its diagnostics identify this environment variable for automatic export. Check the private server implementation to establish additional build-specific prerequisites. Both services must read the two catalog files. The profiler process must be able to write the evaluator's absolute attempt output path and the evaluator must be able to read it; mount the results directory at the same path when using separate containers.

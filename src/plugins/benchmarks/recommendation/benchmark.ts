@@ -38,7 +38,6 @@ export class RecommendationBenchmark implements Benchmark {
     const routes = this.config.collections ?? [{ type: "performance", service: run.solver.service }];
     if (this.config.collections && (run.run.sampling || run.run.taskIds || run.run.offset || run.run.maxTasks !== null))
       throw new TypeError("Use collection lengths or custom inputs to select ordered collection tasks");
-    const endpoints = new Set<string>();
     for (const route of routes) {
       const model = run.services[route.service];
       if (!model || model.name !== run.services[run.solver.service]?.name) throw new TypeError("Collection service missing or model differs");
@@ -47,8 +46,6 @@ export class RecommendationBenchmark implements Benchmark {
       const url = new URL(endpoint);
       if (!["http:", "https:"].includes(url.protocol) || url.pathname !== "/" || url.search || url.hash || url.username || url.password)
         throw new TypeError("sglang-gr requires an HTTP(S) service root URL");
-      if (endpoints.has(url.href)) throw new TypeError("performance and profiling require distinct service URLs");
-      endpoints.add(url.href);
     }
   }
 

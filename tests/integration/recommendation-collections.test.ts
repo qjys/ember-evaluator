@@ -9,13 +9,14 @@ import { stringify } from "yaml";
 import { expect, test } from "vitest";
 import { runCli } from "../../src/cli/main.js";
 
-test.each(["both", "host-only", "performance", "profiling", "zero-hit", "request-error", "generated"])(
+test.each(["both", "shared", "host-only", "performance", "profiling", "zero-hit", "request-error", "generated"])(
   "routes collection %s and rebuilds linked metrics offline", async mode => {
     const dir = await mkdtemp(join(tmpdir(), "gr-collections-"));
     const events: string[] = [], performancePrompts: string[] = [], profilingPrompts: string[] = [];
     const previousPythonPath = process.env.PYTHONPATH;
     let tracing = false, destination = "";
-    const servers = ["performance", "profiling"].map(role => createServer(async (req, res) => {
+    const endpoints = mode === "shared" ? ["default"] : ["performance", "profiling"];
+    const servers = endpoints.map(role => createServer(async (req, res) => {
       events.push(role + req.url);
       if (req.headers.authorization !== "Bearer " + role + "-key") {
         res.statusCode = 401;
@@ -53,7 +54,7 @@ test.each(["both", "host-only", "performance", "profiling", "zero-hit", "request
     }));
     try {
       const services: Record<string, unknown> = {};
-      for (const [i, role] of ["performance", "profiling"].entries()) {
+      for (const [i, role] of endpoints.entries()) {
         const server = servers[i]!;
         await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
         const addr = server.address();
@@ -68,14 +69,15 @@ test.each(["both", "host-only", "performance", "profiling", "zero-hit", "request
         await writeFile(join(dir, "vocab.json"), JSON.stringify({ "<s_a_0>": 151669, "<s_b_0>": 159861, "<s_c_0>": 168053 }));
         process.env.PYTHONPATH = fileURLToPath(new URL("../fixtures/recommendation/tokenizer-stub/", import.meta.url));
       }
-      const standard = mode === "both";
+      const standard = mode === "both" || mode === "shared";
       const lengths = standard ? [128, 512, 1024, 5120, 10240] : [128, 512];
       if (standard) for (const length of lengths)
         await writeFile(join(dir, `prompts_${length}_batch_4.json`), JSON.stringify(["a", "b", "c", "d"]));
       const yaml = join(dir, "experiment.yaml");
       await writeFile(yaml, stringify({ services, benchmark: { name: "recommendation", scenario: standard ? "north-star" : "custom",
-        ...(Object.keys(services).length === 2 ? { collections: [{ type: "profiling", service: "profiling", ...(standard ? {} : { lengths: [128] }) },
-          { type: "performance", service: "performance" }] } : {}),
+        ...(mode === "shared" || Object.keys(services).length === 2 ? { collections: [
+          { type: "profiling", service: mode === "shared" ? "default" : "profiling", ...(standard ? {} : { lengths: [128] }) },
+          { type: "performance", service: mode === "shared" ? "default" : "performance" }] } : {}),
         config: { tag: "fast", ...(standard ? { promptDir: "." } : {
           ...(mode === "generated" ? { dataMode: "generated", generator: { lengths, samplesPerLength: 3 } } :
             { inputs: lengths.map(length => ({ length, file: "prompts.json" })) }), requests: 1, warmup: 0 }),
@@ -92,7 +94,25 @@ test.each(["both", "host-only", "performance", "profiling", "zero-hit", "request
       if (mode === "generated") expect(profilingPrompts).toEqual([performancePrompts[0], performancePrompts[0]]);
       const run = out.at(-1)!;
       const parent = JSON.parse(await readFile(join(run, "metrics.json"), "utf8"));
-      expect(parent.collections.sort()).toEqual(Object.keys(services).sort());
+      const collectionTypes = mode === "shared" ? ["performance", "profiling"] : Object.keys(services).sort();
+      expect(parent.collections.sort()).toEqual(collectionTypes);
+      if (mode === "shared") {
+        const request = "default/v1/gr/beam_search", start = "default/start_profile", stop = "default/stop_profile";
+        const firstProfile = events.indexOf(start);
+        // The sixth health check opens the first profiling task, after all 5 x (2 + 8) ordinary requests.
+        const healthChecks = events.flatMap((e, i) => e === "default/health" ? [i] : []);
+        expect(healthChecks).toHaveLength(10);
+        const profileTask = healthChecks[5]!;
+        expect(firstProfile).toBeGreaterThan(profileTask);
+        expect(events.slice(0, profileTask).filter(e => e === request)).toHaveLength(50);
+        expect(events.filter(e => e === start || e === stop)).toEqual(lengths.flatMap(() => [start, stop]));
+        for (const [i, event] of events.entries()) {
+          if (event === start) expect(events.slice(i, events.indexOf(stop, i)).filter(e => e === request)).toHaveLength(1);
+        }
+        expect(parent.metrics["recommendation-performance"].points.map((p: { successfulRequests: number }) => p.successfulRequests)).toEqual([8, 8, 8, 8, 8]);
+        expect(parent.metrics["recommendation-profiling"].complete).toBe(true);
+        expect(parent.metrics["recommendation-profiling"].points).toHaveLength(5);
+      }
       if ("performance" in services) {
         expect(parent.metrics["recommendation-performance"].points).toHaveLength(lengths.length);
         expect(parent.metrics["recommendation-performance"].points.every((p: { valid: boolean }) => p.valid)).toBe(true);
@@ -112,7 +132,7 @@ test.each(["both", "host-only", "performance", "profiling", "zero-hit", "request
         if (mode === "host-only") expect(profile.profile.exports[0]).toMatchObject({ deviceEvidence: false, operatorHostUs: 25 });
       }
       for (const s of servers) await new Promise<void>(resolve => s.close(() => resolve()));
-      const files = ["report.md", "metrics.json", ...Object.keys(services).flatMap(k => [k+"/report.md", k+"/metrics.json"])];
+      const files = ["report.md", "metrics.json", ...collectionTypes.flatMap(k => [k+"/report.md", k+"/metrics.json"])];
       const before = await Promise.all(files.map(f => readFile(join(run, f), "utf8")));
       expect(await runCli(["report", run], io)).toBe(0);
       expect(await Promise.all(files.map(f => readFile(join(run, f), "utf8")))).toEqual(before);
@@ -127,6 +147,7 @@ test.each(["both", "host-only", "performance", "profiling", "zero-hit", "request
       for (const s of servers) if (s.listening) await new Promise<void>(resolve => s.close(() => resolve()));
       if (previousPythonPath === undefined) delete process.env.PYTHONPATH;
       else process.env.PYTHONPATH = previousPythonPath;
+      delete process.env.GR_TEST_default;
       delete process.env.GR_TEST_profiling;
       delete process.env.GR_TEST_performance;
       await rm(dir, { recursive: true, force: true });

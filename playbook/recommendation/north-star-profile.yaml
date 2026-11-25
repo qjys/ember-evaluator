@@ -1,0 +1,27 @@
+hardware: npu
+services:
+  default:
+    model: Qwen3-0.6B-OneRecVocab
+    base_url: http://127.0.0.1:30000
+    api_key: ${MODEL_API_KEY}
+benchmark:
+  name: recommendation
+  scenario: north-star
+  collections:
+    - type: performance
+      service: default
+    - type: profiling
+      service: default
+  solver:
+    config:
+      tokenizerPath: ${GR_TOKENIZER_DIR}
+      # L 为目标 token 数。该示例允许 ±8 token，实际长度随测量点保存。
+      lengthToleranceTokens: 8
+  config:
+    # Optional: budgetVersion: legacy-eager (default for new runs: gr-a2-2026-11-23)
+    tag: base
+    promptDir: ${GR_PROMPT_DIR}
+    prefix1File: ${GR_PREFIX1_FILE}
+    prefix2File: ${GR_PREFIX2_FILE}
+run:
+  timeoutSeconds: 3600

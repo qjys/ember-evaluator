@@ -50,6 +50,18 @@ python -m sglang.launch_server --model "$GR_TOKENIZER_DIR" --device npu --attent
 
 ## 一个 run 同时采集 E2E 和算子指标
 
+### 单个服务地址
+
+按原命令启动一个 SGLang-GR 服务并保持运行。使用[单服务五档实验](../../../playbook/recommendation/north-star-profile.yaml)，只需在 `services.default.base_url` 填一次服务地址。两个 collection 都选择 `service: default`。配置好前文的 tokenizer、prompt、catalog 和 API key 后运行：
+
+```bash
+arsi-evaluator run playbook/recommendation/north-star-profile.yaml
+```
+
+默认 tag 为 base。五档普通请求全部结束后，evaluator 才向同一地址发送 /start_profile 和 /stop_profile。每档预热后仅采一条 trace；这些请求独立于正式 E2E 样本。本 GR 端点为非流式，客户端 TTFT 等于 E2E。根目录 report.md 包含两张表，performance/ 与 profiling/ 下保留各自明细。profiling 控制接口作用于整个服务，实验期间请独占该实例。让服务端和 evaluator 使用相同绝对路径共享 catalog 和 trace 输出目录。gr-a2 默认启用 NPU 自动导出，若部署环境关闭了该选项，请在起服务时设置 SGLANG_NPU_PROFILE_AUTO_EXPORT=1。
+
+### 两个服务地址
+
 使用[双服务实验](../../../playbook/recommendation/north-star-collections.yaml)。两端使用同一候选构建、模型、词表、catalog 和 base/fast 设置。外部启动普通服务并监听 30000。启动 profiling 服务时，在同一条启动命令前设置 `SGLANG_NPU_PROFILE_AUTO_EXPORT=1`，端口改为 30001。原脚本通过 HTTP 请求 CPU、NPU activities，其诊断依赖此环境变量自动导出。私有服务构建的其他前置条件可在其 `profiler_manager` 实现中核实。Evaluator 和两端都需要能读相同绝对路径的 catalog。profiling 服务必须能按 evaluator 提供的绝对路径写入 attempt 目录；分容器部署时用相同绝对路径挂载 results 目录并赋予相应读写权限。
 
 在三个终端进入 evaluator 仓库，沿用同一份 `.scratch/gr-debug.env`。两服务使用同一候选版本和输入。GR_PORT 配置普通服务端口（默认 30000），GR_PROFILE_PORT 配置 profiling 端口（默认 30001）。两服务都就绪后再执行第三条。
