@@ -1,9 +1,7 @@
 """Single profiled request against the independently managed GR service."""
 import json
-import os
 import signal
 import time
-from pathlib import Path
 
 from profile_export import summarize_export
 
@@ -27,13 +25,7 @@ def wait_for_exports(root, timeout):
     raise TimeoutError(f"profiler export unavailable at {root}; check shared mount and SGLANG_NPU_PROFILE_AUTO_EXPORT=1")
 
 
-def capture(config, http, sample):
-    output = Path(config["output"])
-    # Windows may disable long Win32 paths even though Node created the attempt.
-    if os.name == "nt":
-        absolute = str(output.resolve())
-        if not absolute.startswith("\\\\?\\"):
-            output = Path("\\\\?\\UNC\\" + absolute[2:] if absolute.startswith("\\\\") else "\\\\?\\" + absolute)
+def capture(config, http, sample, output):
     root = output / "trace"
     root.mkdir()
     timeout = config["timeout"]

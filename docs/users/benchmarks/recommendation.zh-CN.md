@@ -52,22 +52,18 @@ python -m sglang.launch_server --model "$GR_TOKENIZER_DIR" --device npu --attent
 
 使用[双服务实验](../../../playbook/recommendation/north-star-collections.yaml)。两端使用同一候选构建、模型、词表、catalog 和 base/fast 设置。外部启动普通服务并监听 30000。启动 profiling 服务时，在同一条启动命令前设置 `SGLANG_NPU_PROFILE_AUTO_EXPORT=1`，端口改为 30001。原脚本通过 HTTP 请求 CPU、NPU activities，其诊断依赖此环境变量自动导出。私有服务构建的其他前置条件可在其 `profiler_manager` 实现中核实。Evaluator 和两端都需要能读相同绝对路径的 catalog。profiling 服务必须能按 evaluator 提供的绝对路径写入 attempt 目录；分容器部署时用相同绝对路径挂载 results 目录并赋予相应读写权限。
 
-在已配置 GR 路径与设备映射的两个服务终端分别执行。base 实验将两条命令的 `fast` 和 YAML 的 `tag` 一起改为 `base`。
+在三个终端进入 evaluator 仓库，沿用同一份 `.scratch/gr-debug.env`。两服务使用同一候选版本和输入。GR_PORT 配置普通服务端口（默认 30000），GR_PROFILE_PORT 配置 profiling 端口（默认 30001）。两服务都就绪后再执行第三条。
 
 ```bash
-# 终端 A：普通性能服务
-GR_PORT=30000 bash scripts/recommendation/gr-debug.sh serve fast
-# 终端 B：支持导出的采集服务
-SGLANG_NPU_PROFILE_AUTO_EXPORT=1 GR_PORT=30001 bash scripts/recommendation/gr-debug.sh serve fast
+# 终端 A · 普通服务
+bash scripts/recommendation/gr-debug.sh serve fast
+# 终端 B · 带 NPU profiler 自动导出的服务
+bash scripts/recommendation/gr-debug.sh serve-profile fast
+# 终端 C · 一次 run 先采客户端性能，再采算子 trace
+bash scripts/recommendation/gr-debug.sh run-collections fast
 ```
 
-在 evaluator 终端执行：
-
-```bash
-arsi-evaluator run playbook/recommendation/north-star-collections.yaml --dry-run
-arsi-evaluator run playbook/recommendation/north-star-collections.yaml
-arsi-evaluator report "$RUN"  # RUN 取上一步末行的 run 目录
-```
+脚本最后打印总报告 report.md，内含推荐性能表和算子 profiling 表。测 base 时三条命令都用 base。分开部署时可直接在实验 YAML 填两个服务的地址，再执行 `arsi-evaluator run playbook/recommendation/north-star-collections.yaml`。
 
 按 `benchmark.collections[].service` 绑定地址和凭据。只保留一类 collection 及对应 service 即可单采；原有 `services.default` 示例仍只测 E2E。五档性能测完后，各 profiling 档取本档第一条 prompt，先预热 1–5 次（单次 ≤1000 ms 时结束），再 POST `/start_profile`，设置 CPU/NPU 活动、record_shapes=true、with_stack=false、profile_by_stage=false。重置计数器后仅采一次约束搜索，再 POST `/stop_profile`，等待导出文件稳定。默认每档等候 1800 秒，可用 `benchmark.solver.config.exportTimeoutSeconds` 调整，并为整个任务留足超时余量。在 profiling 条目添加 `lengths: [128, 10240]` 可只采首尾档。组合采集遇到 E2E 点失败或 fast 快路未验证（north-star 以 L=128 为准）会跳过 profiling；超过历史时延预算仍可采集。
 

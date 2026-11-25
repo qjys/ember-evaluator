@@ -2,6 +2,7 @@
 import hashlib
 import json
 import math
+import os
 import sys
 import time
 import urllib.error
@@ -183,9 +184,14 @@ def measure(config):
         return row
 
     output = Path(config["output"])
+    # Windows may disable long Win32 paths even though Node created the attempt.
+    if os.name == "nt":
+        absolute = str(output.resolve())
+        if not absolute.startswith("\\\\?\\"):
+            output = Path("\\\\?\\UNC\\" + absolute[2:] if absolute.startswith("\\\\") else "\\\\?\\" + absolute)
     if config.get("collection") == "profiling":
         from profile_capture import capture
-        profile = capture(config, http, sample)
+        profile = capture(config, http, sample, output)
         verify_catalog_files(paths, point)
         return {"profile": profile}
     with (output / "session.jsonl").open("w", encoding="utf-8") as evidence:
