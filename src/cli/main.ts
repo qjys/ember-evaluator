@@ -3,6 +3,7 @@ import { CommandUsageError, parseCommand as parseArgs } from "./commands.js";
 import { readFile } from "node:fs/promises";
 import { resolve, join } from "node:path";
 import type { LoadedExecution } from "../application/run.js";
+import { compareRecommendationRuns } from "../application/report/compare-recommendation.js";
 import { rebuildReport } from "../application/report/index.js";
 import { formatError, redactDiagnostic, summarizeDiagnostic } from "../core/errors/diagnostics.js";
 import type { ProgressEvent } from "../core/progress/progress.js";
@@ -252,6 +253,13 @@ async function runCliCommand(
       io.out(JSON.stringify(result, null, 2));
       return signal.aborted ? 130 : result.checks.some(check => check.status === "failed") || result.network.status !== "passed" ? 1 : 0;
     } catch (error) { failure(error); return signal.aborted ? 130 : 2; }
+  }
+  if (command.kind === "compare-recommendation") {
+    try {
+      const comparison = await compareRecommendationRuns(command.base, command.fast);
+      io.out(JSON.stringify(comparison, null, 2));
+      return comparison.status === "match" ? 0 : comparison.status === "mismatch" ? 1 : 2;
+    } catch (error) { failure(error); return 2; }
   }
   if (command.kind === "report") {
     progress({ phase: "report", message: `Computing metrics and generating a report from saved results: ${resolve(command.directory)}` });

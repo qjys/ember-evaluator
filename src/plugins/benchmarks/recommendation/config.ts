@@ -1,3 +1,4 @@
+import { parseBudgetVersion, type BudgetVersion } from "./budgets.js";
 import { join } from "node:path";
 import { expectNonEmptyString, expectPositiveInteger, expectRecord, rejectUnknown } from "../../../core/validation/input.js";
 
@@ -7,6 +8,7 @@ export type CollectionRoute = { type: "performance" | "profiling"; service: stri
 export type RecommendationConfig = Workload & {
   scenario: "north-star" | "custom";
   tag: "base" | "fast";
+  budgetVersion?: BudgetVersion;
   generator?: { seed: number; samplesPerLength: number };
   inputs: { length: number; file: string }[];
   prefix1File: string;
@@ -17,11 +19,13 @@ export type RecommendationConfig = Workload & {
 
 export function parseRecommendationConfig(value: unknown): RecommendationConfig {
   const v = expectRecord(value, "recommendation");
-  rejectUnknown(v, ["scenario", "tag", "dataMode", "generator", "promptDir", "inputs", "prefix1File", "prefix2File", "beamWidth", "decodeSteps", "concurrency", "requests", "warmup", "comparison", "collections"], "recommendation");
+  rejectUnknown(v, ["scenario", "tag", "budgetVersion", "dataMode", "generator", "promptDir", "inputs", "prefix1File", "prefix2File", "beamWidth", "decodeSteps", "concurrency", "requests", "warmup", "comparison", "collections"], "recommendation");
   const scenario = v.scenario ?? "north-star";
   const tag = v.tag ?? "base";
   if (scenario !== "north-star" && scenario !== "custom") throw new TypeError("Unknown recommendation scenario");
   if (tag !== "base" && tag !== "fast") throw new TypeError("recommendation.tag must be base or fast");
+  const budgetVersion = v.budgetVersion === undefined ? undefined : parseBudgetVersion(v.budgetVersion);
+  if (budgetVersion && scenario !== "north-star") throw new TypeError("budgetVersion requires north-star");
   const workload = {
     beamWidth: expectPositiveInteger(v.beamWidth ?? 128, "beamWidth"),
     decodeSteps: expectPositiveInteger(v.decodeSteps ?? 3, "decodeSteps"),
@@ -92,6 +96,6 @@ export function parseRecommendationConfig(value: unknown): RecommendationConfig 
       devices: expectNonEmptyString(identity.devices, "comparison.devices"), modelRevision: expectNonEmptyString(identity.modelRevision, "comparison.modelRevision"),
       tokenizerRevision: expectNonEmptyString(identity.tokenizerRevision, "comparison.tokenizerRevision") };
   }
-  return { scenario, tag, inputs, ...(generator && { generator }), ...(collections && { collections }), ...workload, ...(comparison && { comparison }), prefix1File: expectNonEmptyString(v.prefix1File, "prefix1File"),
+  return { scenario, tag, inputs, ...(budgetVersion && { budgetVersion }), ...(generator && { generator }), ...(collections && { collections }), ...workload, ...(comparison && { comparison }), prefix1File: expectNonEmptyString(v.prefix1File, "prefix1File"),
     prefix2File: expectNonEmptyString(v.prefix2File, "prefix2File") };
 }

@@ -91,7 +91,7 @@ arsi-evaluator report "$RUN"  # RUN 取上一步末行的 run 目录
 }
 ```
 
-gr-a2 手工脚本中的 910B2 eager 历史读数依次为 68.7、66.7、69.3、99.8、180.178 ms。原脚本将其标为较早软件版本和测量窗口中的预算，正式对标应填写同一 session 重采的数值。
+旧版 `legacy-eager` 的 910B2 eager 历史读数依次为 68.7、66.7、69.3、99.8、180.178 ms。原脚本将其标为较早软件版本和测量窗口中的预算，正式对标应填写同一 session 重采的数值。
 
 ## 从源码运行 base 和 fast
 
@@ -136,4 +136,28 @@ smoke 只测 L=128。base 和 fast 分别运行五档，将命令日志、实验
 | 阶段占比、主段、client | prefill、pf_sel、decode1、decode2、tail 分别除以平均服务端 span；主段取最大占比。client = E2E 均值 − span 均值，cli% = client / E2E 均值 × 100，可为负。 |
 | Decode 诊断 | 报告另列 admission、prefill/decode commit、overshoot、每个后续 decode 间隔的均值、每次 selection 的均值、步数/请求、快路命中或跳过次数、decode API 分支及 PID。 |
 
-标准报告按原脚本给出 910B2 历史 eager 的逐档差额、L=128 子目标和五档整体判定，五档全部在预算内才算整体达标。910B1 graph 一列为本次 p50 与跨机历史 p50 的比值。自定义场景只展示选定档位。旧 run 可离线重算有证据的指标，未记录的正式窗口和无法区分的历史失败状态显示为 `—`。
+标准报告按本轮保存的预算版本给出 L=128 子目标和五档整体判定，五档全部在预算内才算整体达标。910B1 graph 一列为本次 p50 与跨机历史 p50 的比值。自定义场景只展示选定档位。旧 run 可离线重算有证据的指标，未记录的正式窗口和无法区分的历史失败状态显示为 `—`。
+
+## 预算、快路与 base/fast 输出对比
+
+新的 north-star run 默认锁定 `gr-a2-2026-11-23`。需要复现实验时可在 `benchmark.config` 显式写 `budgetVersion: legacy-eager` 或 `budgetVersion: gr-a2-2026-11-23`。旧 run 没有版本字段时，离线报告沿用 `legacy-eager`。custom 不设历史预算。
+
+| 910B2 预算（ms） | L=128 | L=512 | L=1024 | L=5120 | L=10240 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 当前 graph 门槛 | 35.22 | 36.90 | 41.01 | 84.58 | 169.99 |
+| 同批 eager 参考 | 68.10 | 73.56 | 70.07 | 111.01 | 196.00 |
+| 旧 eager 门槛 | 68.70 | 66.70 | 69.30 | 99.80 | 180.178 |
+
+当前预算取自 gr-a2 提交 `1406e1c` 的引擎内 profiler 段，排除 HTTP 和准入。与客户端 E2E 的差额用于检查预算；计算两引擎实测加速比需同协议重采。逐档 `fastpathStatus` 为 `hit`、`miss`、`unverified`。分子是 shared-prefix decode forward 次数，分母是 decode forward 次数。窗口已重置、分母为正且分子在有效范围时，正分子为命中，零为未命中；缺字段、零分母或重置未确认时为未验证。north-star 的 fast 门槛看 L=128，报告保留其他四档的证据。
+
+先以相同模型、词表、catalog、prompt 和负载各跑一次 base、fast。命令按 base、fast 顺序接收 evaluator 打印的两个 **run 根目录**。推理服务停止后仍可执行。
+
+```bash
+arsi-evaluator compare-recommendation "$BASE_RUN" "$FAST_RUN" > sid-comparison.json
+rc=$?
+echo "comparison exit=$rc"
+```
+
+命令核对模型名、已声明的模型/词表版本、输入摘要、长度和负载，选取各 run 生效的 attempt，仅比较正式请求。每行按长度、请求序号（从 0 开始）和 prompt 索引对齐，按返回顺序比较全部候选的 SID token IDs 和分数。分数使用严格数值相等，`scoreDeltas` 为 fast 减 base。顶层 `summary` 汇总全部档位并给出首个差异所在的长度和序号。每档含 `requests`、`verified`、`sidMatches`、`sidMatchRate`（分母为 verified）、`scoreMatches` 和 `firstMismatch`。运行未声明 revision 时，JSON 中对应字段为 null。同名模型的实际部署版本由实验方核实。
+
+退出码 0 表示全部输出一致，1 表示完整证据中存在差异，2 表示条件不匹配、输入错误或证据不全。条件不匹配的原因输出到 stderr。旧 run 的单候选证据可以回放；旧多候选记录缺少其余候选分数时显示未验证。输出一致性与性能达标、快路是否命中分别判断。

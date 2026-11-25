@@ -13,6 +13,7 @@ benchmark:
       # L 为目标 token 数。该示例允许 ±8 token，实际长度随测量点保存。
       lengthToleranceTokens: 8
   config:
+    # Optional: budgetVersion: legacy-eager (default for new runs: gr-a2-2026-11-23)
     tag: base
     promptDir: ${GR_PROMPT_DIR}
     prefix1File: ${GR_PREFIX1_FILE}

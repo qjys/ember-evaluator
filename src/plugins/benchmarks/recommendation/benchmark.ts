@@ -1,5 +1,7 @@
 import { join } from "node:path";
 import { expectNonEmptyString, expectPositiveInteger, expectRecord } from "../../../core/validation/input.js";
+import { currentBudget, parseBudgetVersion } from "./budgets.js";
+import { fastpathEvidence } from "./counters.js";
 import { prepareDataset, type DatasetRuntime } from "./dataset.js";
 import type { ActivityListener } from "../../../core/contracts/activity.js";
 import type { Benchmark } from "../../../core/contracts/benchmark.js";
@@ -62,8 +64,12 @@ export class RecommendationBenchmark implements Benchmark {
     const { files, manifestSha256 } = await prepareDataset(this.config, this.dataset, this.resolvePath, signal);
     if (manifestSha256) activity?.({ lines: ["Generated dataset: " + join(this.dataset.directory, manifestSha256, "dataset.json")] });
     const { scenario, tag, beamWidth, decodeSteps, concurrency, requests, warmup, comparison } = this.config;
+    const oldMeta = previous ? expectRecord(previous.metadata, "saved recommendation source") : null;
+    const previousBudget = oldMeta?.budgetVersion;
+    const defaultBudget = previous ? (previousBudget === undefined ? undefined : parseBudgetVersion(previousBudget)) : currentBudget;
+    const budgetVersion = scenario === "north-star" ? this.config.budgetVersion ?? defaultBudget : undefined;
     const lock = { source: "recommendation:local", revision: fingerprintConfig(files), files,
-      metadata: { ...(manifestSha256 && { generatedManifestSha256: manifestSha256 }), ...(this.config.collections && { collections: this.config.collections }), scenario, tag, beamWidth, decodeSteps, concurrency, requests, warmup, comparison: comparison ?? null } };
+      metadata: { ...(budgetVersion && { budgetVersion }), ...(manifestSha256 && { generatedManifestSha256: manifestSha256 }), ...(this.config.collections && { collections: this.config.collections }), scenario, tag, beamWidth, decodeSteps, concurrency, requests, warmup, comparison: comparison ?? null } };
     if (previous && fingerprintConfig(previous) !== fingerprintConfig(lock)) throw new Error("Recommendation source or workload changed since the run was created");
     return lock;
   }
@@ -88,9 +94,8 @@ export class RecommendationBenchmark implements Benchmark {
         throw new Error("Profiling skipped: incomplete performance collection at L" + length);
       const obs = record.solve?.observations;
       const counters = obs && typeof obs === "object" && !Array.isArray(obs) ? obs.counters : null;
-      const hit = counters && typeof counters === "object" && !Array.isArray(counters) &&
-        typeof counters.decode_forward === "number" && counters.decode_forward > 0 &&
-        typeof counters.shared_prefix_forward === "number" && counters.shared_prefix_forward > 0;
+      const reset = obs && typeof obs === "object" && !Array.isArray(obs) && obs.resetOk === true;
+      const hit = fastpathEvidence(counters, !!reset).fastpathStatus === "hit";
       return { length, hit };
     });
     const gate = this.config.scenario === "north-star" ? gateHits.filter(p => p.length === 128) : gateHits;

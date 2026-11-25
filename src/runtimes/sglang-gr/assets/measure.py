@@ -68,9 +68,11 @@ def record_choices(row, response, depth, prefix1, prefix2):
         return
     row.update(status="ok", choiceCount=len(choices), sidValid=True, scoresFinite=True)
     details = []
+    row["candidates"] = []
     for index, choice in enumerate(choices):
         ids = choice.get("output_ids") or []
         score = finite_score(choice.get("score"))
+        row["candidates"].append({"outputIds": ids, "score": score})
         problem = check_sid(ids, depth, prefix1, prefix2)
         details.append(problem or "(" + ",".join(str(i - base) for i, base in zip(ids, (151669, 159861, 168053))) + ")")
         row["sidValid"] &= problem is None
@@ -194,8 +196,8 @@ def measure(config):
         for i in range(point["warmup"]):
             save(sample("warmup", i))
         try:
-            http("/debug/gr_counters?reset=true")
-            reset_ok = True
+            reset = http("/debug/gr_counters?reset=true")
+            reset_ok = isinstance(reset, dict) and reset.get("available") is not False and not reset.get("error")
         except (OSError, ValueError, HTTPException):
             reset_ok = False
         # Match gr_diag: include pool startup/drain, exclude evidence serialization.

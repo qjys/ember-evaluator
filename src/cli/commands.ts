@@ -12,6 +12,7 @@ export type Command = (
   | { kind: "init"; name: string; output: string; patchPath?: string }
   | { kind: "doctor"; file: string; overrides: CliOverrides; patchPath?: string }
   | { kind: "inspect"; file: string; overrides: CliOverrides; patchPath?: string }
+  | { kind: "compare-recommendation"; base: string; fast: string }
   | { kind: "report"; directory: string }
   | { kind: "plugin"; plugin: PluginCliCommand; argv: string[] }
   | { kind: "run"; file: string; overrides: CliOverrides; resume?: string | null; taskIdsFile?: string; patchPath?: string }
@@ -88,6 +89,9 @@ export function parseCommand(argv: string[], extensions: CliExtensions = { comma
     .requiredOption("--benchmark <name>", "Registered benchmark to initialize")
     .requiredOption("--output <yaml>", "Destination YAML file (existing files are not overwritten)"))
     .action((opts: Options) => { result = { kind: "init", name: String(opts.benchmark), output: resolve(String(opts.output)), ...(opts.patch ? { patchPath: resolve(opts.patch) } : {}) }; });
+  program.command("compare-recommendation").description("Compare formal SID candidates and scores from saved base and fast runs as JSON")
+    .argument("<base-run-dir>").argument("<fast-run-dir>")
+    .action((base: string, fast: string) => { result = { kind: "compare-recommendation", base, fast }; });
   program.command("report").description("Rebuild metrics and report.md from saved results without a model API key")
     .argument("<run-dir>", "Directory containing a saved run")
     .action((directory: string) => { result = { kind: "report", directory }; });

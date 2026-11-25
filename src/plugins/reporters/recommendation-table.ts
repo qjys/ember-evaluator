@@ -20,17 +20,17 @@ export function renderRecommendationTable(value: JsonValue | undefined): string[
   if (!Array.isArray(value.points)) throw new TypeError("Invalid recommendation report points");
   const rows = value.points.map(fields);
   const verdict: Record<string, string> = { pass: "达标", fail: "未达标", invalid: "无效", unassessed: "未判定" };
-  const tag: Record<string, string> = { "not-requested": "base", hit: "已命中", miss: "零命中", unverified: "未验证" };
+  const tag: Record<string, string> = { "not-requested": "base", hit: "已命中", miss: "未命中", unverified: "未验证" };
   const lines = ["## 推荐性能", "", `场景 ${escaped(String(value.scenario))} · 快路 ${tag[String(value.fast)] ?? "未知"}`, ""];
   if (value.scenario === "north-star") {
     const north = fields(value.northStar);
     const missing = Array.isArray(north.missingLengths) && north.missingLengths.length ? `（缺档 ${north.missingLengths.join(" / ")}）` : "";
-    lines.push(`五档有效测量 ${value.complete ? "齐全" : "不完整"}${missing} · 910B2 历史预算 L=128 ${verdict[String(north.l128)] ?? "未判定"}，五档整体${verdict[String(north.overall)] ?? "未判定"} · 同 session L=128 ${verdict[String(value.l128)] ?? "未判定"}`, "");
+    lines.push(`五档有效测量 ${value.complete ? "齐全" : "不完整"}${missing} · 预算 ${escaped(String(north.budgetVersion ?? "legacy-eager"))}（910B2 ${escaped(String(north.gate ?? "eager"))}）L=128 ${verdict[String(north.l128)] ?? "未判定"}，五档整体${verdict[String(north.overall)] ?? "未判定"} · 同 session L=128 ${verdict[String(value.l128)] ?? "未判定"}`, "");
   }
-  lines.push(...table(["目标长度", "状态", "有效请求 / 计划", "正式 prompt 数", "E2E p50 (ms)", "同 session eager (ms)", "差额 (ms)", "快路 / decode forward", "快路 (%)"], rows.map(r => [
+  lines.push(...table(["目标长度", "状态", "有效请求 / 计划", "正式 prompt 数", "E2E p50 (ms)", "同 session eager (ms)", "差额 (ms)", "快路状态", "快路 / decode forward", "快路 (%)"], rows.map(r => [
     r.length, r.valid ? "有效" : (Array.isArray(r.invalidReasons) && r.invalidReasons.length ? r.invalidReasons.join("，") : "缺少有效测量"),
     `${r.successfulRequests}/${r.requests}`, r.prompts, number(r.p50Ms), r.baselineStatus === "mismatch" ? "条件不匹配" : number(r.baselineMs),
-    number(r.deltaMs), `${r.fastpathForward ?? "—"}/${r.decodeForward ?? "—"}`, typeof r.fastpathRatio === "number" ? number(100 * r.fastpathRatio, 1) : "—",
+    number(r.deltaMs), tag[String(r.fastpathStatus)] ?? "未验证", `${r.fastpathForward ?? "—"}/${r.decodeForward ?? "—"}`, typeof r.fastpathRatio === "number" ? number(100 * r.fastpathRatio, 1) : "—",
   ])));
   lines.push("### 客户端正式请求", "",
     "时延单位为 ms。成功响应进入时延分布，SID 和分数分别校验。非流式 TTFT 等于完整响应 E2E。", "",
@@ -66,10 +66,10 @@ export function renderRecommendationTable(value: JsonValue | undefined): string[
       })));
   }
   if (value.scenario === "north-star") {
-    lines.push("### 原脚本历史预算", "", "910B2 eager 来自历史软件版本与测量窗口，910B1 graph 来自另一台机器。差额为本次 p50 减去预算。", "",
-      ...table(["长度", "910B2 eager (ms)", "差额 (ms)", "p50 / eager", "910B1 graph (ms)", "p50 / graph"], rows.map(r => {
+    lines.push("### 原脚本历史预算", "", "本次测量为客户端完整请求 E2E。历史预算源自 profiler 推理段，2026-11-23 的同机 graph/eager 不含 HTTP 和准入；910B1 graph 为跨机参考。同协议实测对照见上表。", "",
+      ...table(["长度", "门槛 (ms)", "与门槛差额 (ms)", "910B2 graph (ms)", "910B2 eager (ms)", "与 eager 差额 (ms)", "p50 / eager", "910B1 graph (ms)", "p50 / graph"], rows.map(r => {
         const h = fields(r.historical);
-        return [r.length, number(h.eagerMs), number(h.deltaEagerMs), number(h.eagerRatio), number(h.graphMs), number(h.graphRatio)];
+        return [r.length, number(h.gateMs), number(h.deltaGateMs), number(h.graph910b2Ms), number(h.eagerMs), number(h.deltaEagerMs), number(h.eagerRatio), number(h.graphMs), number(h.graphRatio)];
       })));
     const profile = fields(fields(value.northStar).historicalEagerProfile);
     if (profile.length) lines.push(`历史 910B2 eager 在 L=${profile.length} 时记录了 ${profile.kernels} 个 kernel，Stage ${profile.stageUs} μs，op_total ${profile.opTotalUs} μs，Free ${profile.freeUs} μs。`, "");

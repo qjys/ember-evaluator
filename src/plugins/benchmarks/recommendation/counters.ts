@@ -7,16 +7,29 @@ const countFields = [
   "decode_api_fia", "decode_api_fa", "decode_api_paged", "decode_api_sinks", "decode_api_beam_graph", "sdpa_decode_calls",
 ] as const;
 
-export function sglangDiagnostics(value: unknown, meanMs: number | null = null) {
+export function fastpathEvidence(value: unknown, resetOk: boolean) {
+  const raw = value && typeof value === "object" && !Array.isArray(value) ? expectRecord(value, "GR counters") : {};
+  function read(key: string) {
+    const n = raw[key];
+    return typeof n === "number" && Number.isSafeInteger(n) && n >= 0 ? n : null;
+  }
+  const fastpathForward = read("shared_prefix_forward"), decodeForward = read("decode_forward");
+  const fastpathRatio = resetOk && fastpathForward !== null && decodeForward !== null && decodeForward > 0 && fastpathForward <= decodeForward
+    ? fastpathForward / decodeForward : null;
+  return { fastpathForward, decodeForward, fastpathRatio,
+    fastpathStatus: fastpathRatio === null ? "unverified" : fastpathRatio > 0 ? "hit" : "miss" };
+}
+
+export function sglangDiagnostics(value: unknown, meanMs: number | null = null, resetOk = true) {
   const raw = expectRecord(value, "SGLang GR counters");
   function count(key: string): number {
     const n = raw[key] ?? 0;
     if (typeof n !== "number" || !Number.isSafeInteger(n) || n < 0) throw new TypeError(`Invalid GR counter ${key}`);
     return n;
   }
-  const counts = Object.fromEntries(countFields.map(key => [key, count(key)]));
+  const counts = Object.fromEntries(countFields.map(key => [key, raw[key] == null ? null : count(key)]));
   const admitted = count("groups_admitted"), finished = count("groups_finished"), steps = count("decode_steps");
-  const decodeForward = count("decode_forward"), selections = count("decode_selection"), fastpathForward = count("shared_prefix_forward");
+  const decodeForward = count("decode_forward"), selections = count("decode_selection");
   const stageMs: Record<string, number> = {};
   for (const [name, field, groups] of [
     ["span", "request_span_us", finished], ["prefill", "prefill_wait_us", admitted], ["pf_sel", "prefill_selection_us", admitted],
@@ -43,7 +56,7 @@ export function sglangDiagnostics(value: unknown, meanMs: number | null = null) 
   const processIds = Object.fromEntries(["gr_pid_snapshot", "gr_pid_sched", "gr_pid_attn"].map(key => [key, raw[key] == null ? null : count(key)]));
   return { stageMs, shares, dominant, clientGapMs, clientPercent: clientGapMs === null ? null : meanMs ? 100 * clientGapMs / meanMs : 0,
     counts, processIds, exceptionNote: typeof raw.gr_note_shared_prefix_exc === "string" ? raw.gr_note_shared_prefix_exc : null,
-    fastpathForward, decodeForward, fastpathRatio: decodeForward ? fastpathForward / decodeForward : 0,
+    ...fastpathEvidence(raw, resetOk),
     stepMs: count("decode_step_us") / Math.max(steps - groups, 1) / 1000,
     selectionMs: count("decode_selection_us") / Math.max(selections, 1) / 1000, stepsPerRequest: steps / groups,
     overshootRatio: decodeForward ? (decodeForward - selections) / decodeForward : 0,
