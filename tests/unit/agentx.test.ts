@@ -238,3 +238,29 @@ test("legacy msprof summaries remain available to offline reports", async () => 
   const metrics = await new AgentXPerformanceMetrics().compute(value);
   expect(renderMarkdown(value, { "agentx-performance": metrics })).toContain("msprof 服务级 profiling");
 });
+
+test.each([
+  ["performance", ["c1", "c8"]],
+  ["profiling", ["c1-profiling", "c8-profiling"]],
+  ["all", ["c1", "c8", "c1-profiling", "c8-profiling"]],
+] as const)("one YAML selector schedules %s and preserves diagnostic-only report points", async (mode, suffixes) => {
+  const config = parseAgentXConfig({ measurementMode: mode, concurrency: [1, 8], profiling: { traceDirectory: "/shared" } });
+  const bench = new AgentXBenchmark(config, "local");
+  const data = snapshot();
+  if (!data.run.source) throw new Error("Missing fixture source");
+  const tasks = [];
+  for await (const task of bench.enumerate(data.run.source, new AbortController().signal)) tasks.push(task);
+  expect(tasks.map(t => t.id)).toEqual(suffixes.map(s => "agentx-256k-standard-" + s));
+  if (mode === "profiling") {
+    const first = tasks[0];
+    if (!first) throw new Error("Expected diagnostic");
+    await bench.validatePrerequisites(first, async () => data);
+    data.records = [];
+    data.run.taskIds = tasks.map(t => t.id);
+    const metric = await new AgentXPerformanceMetrics().compute(data);
+    expect(metric).toMatchObject({ points: [{ measurement: null }, { measurement: null }] });
+    const report = renderMarkdown(data, { "agentx-performance": metric });
+    expect(report).toContain("serving diagnostics");
+    expect(report).not.toContain("正式压测 ·");
+  }
+});

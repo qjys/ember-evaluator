@@ -1,4 +1,4 @@
-# Use an already running SGLang Ascend service with metrics and profiler export enabled.
+# Use an already running vLLM Ascend service with metrics and profiler export enabled.
 hardware: npu
 services:
   default:
@@ -11,8 +11,11 @@ benchmark:
   config:
     traceCount: 8
     concurrency: [1, 8]
-    engineMetrics: ["sglang:prompt_tokens_total", "sglang:generation_tokens_total"]
+    measurementMode: all   # performance | profiling | all
     profiling:
+      provider: vllm
+      preset: timeline     # compute | cache | bandwidth require devices and local msprof
+      # devices: [1]       # Local serving host: collect CPU, network, memory and these physical NPUs
       # Mount this directory at the same absolute path on the service and evaluator.
       traceDirectory: /data/shared/agentx-traces
       # Default: replay one complete tree per concurrency lane in each diagnostic.

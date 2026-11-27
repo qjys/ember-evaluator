@@ -4,6 +4,8 @@ import json
 import math
 from collections import Counter
 
+from timeline import rank_timeline
+
 
 def rows(path):
     if path.is_file():
@@ -68,6 +70,7 @@ def summarize_export(directory, root):
     categories = Counter()
     spans = {"EXTEND": [], "DECODE": []}
     atb = {}
+    events = []
     trace_file = directory / "trace_view.json"
     if trace_file.is_file():
         with trace_file.open(encoding="utf-8-sig") as trace:
@@ -96,6 +99,23 @@ def summarize_export(directory, root):
     def top(items, key, limit=15):
         return sorted((i for i in items if key in i), key=lambda i: i[key], reverse=True)[:limit]
 
+    host_ops = {}
+    for row in rows(directory / "operator_details.csv"):
+        name = field(row, "Name")
+        if not name:
+            continue
+        slot = host_ops.setdefault(name, {"name": name})
+        add(slot, "count", 1)
+        add(slot, "hostUs", number(row, "Host Self Duration(us)"))
+    shapes = {}
+    for row in rows(directory / "kernel_details.csv"):
+        shape = field(row, "Input Shapes", "Input Shape")
+        name = field(row, "Name", "Kernel Name")
+        if shape and name:
+            slot = shapes.setdefault((name, shape), {"name": name, "shape": shape})
+            add(slot, "count", 1)
+            add(slot, "durationUs", number(row, "Duration(us)", "Duration"))
+    timeline = rank_timeline(events, rows(directory / "kernel_details.csv"))
     device_us = total(ops.values(), "deviceUs")
     by_core = {}
     for op in ops.values():
@@ -114,12 +134,12 @@ def summarize_export(directory, root):
         return value / denominator if value is not None and denominator else None
     wait = total(kernels.values(), "waitUs")
     duration = total(kernels.values(), "durationUs")
-    device = bool(kernel_count or (device_us or 0) > 0 or (stage["Computing"] or 0) > 0 or
+    device = bool(timeline["computeUs"] or timeline["communicationUs"] or kernel_count or (device_us or 0) > 0 or (stage["Computing"] or 0) > 0 or
                   any(categories[c] for c in ("Kernel", "AI Core", "AI_CPU", "AI CPU", "async_npu")))
     return {"directory": directory.relative_to(root).as_posix(), "deviceEvidence": device, "stageUs": stage,
             "operatorSource": source if ops else None, "operatorDeviceUs": device_us if device else None,
-            "operatorHostUs": total(ops.values(), "hostUs"), "topDevice": top(ops.values(), "deviceUs") if device else [],
-            "topHost": top(ops.values(), "hostUs"), "operatorTypes": len(ops), "operatorInstances": total(ops.values(), "count"),
+            "operatorHostUs": total(ops.values(), "hostUs") if source == "operator_details.csv" else total(host_ops.values(), "hostUs"), "topDevice": top(ops.values(), "deviceUs") if device else [],
+            "topHost": top(host_ops.values(), "hostUs"), "operatorTypes": len(ops), "operatorInstances": total(ops.values(), "count"),
             "byCore": list(by_core.values()), "kernelCount": kernel_count or None, "kernelDurationUs": duration,
             "kernelWaitUs": wait, "smallKernels": small or None,
             "kernelWaitRatio": share(wait, wait + duration) if duration is not None and wait is not None else None,
@@ -128,4 +148,5 @@ def summarize_export(directory, root):
             "hostMetadata": host_group({"empty_tensor", "aten::as_strided", "aten::view", "aten::empty", "aten::empty_strided", "aten::copy_"}),
             "hostSync": host_group({"aten::_local_scalar_dense", "aten::nonzero", "aten::_unique"}),
             "topKernelWait": top(kernels.values(), "waitUs", 10), "traceCategories": dict(categories),
+            "topShapes": top(shapes.values(), "durationUs"), "timeline": timeline,
             "stepSpansUs": spans, "atb": list(atb.values())}

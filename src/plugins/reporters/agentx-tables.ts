@@ -6,6 +6,74 @@ const escape = (value: string) => value.replaceAll("&", "&amp;").replaceAll("<",
   .replace(/[\\`*_\[\]()|~]/gu, "\\$&").replace(/\r?\n/gu, " ");
 const number = (value: number | null | undefined) => value == null ? "—" : value.toFixed(3).replace(/\.?0+$/u, "");
 
+function renderDiagnostics(p: Record<string, unknown>): string[] {
+  const lines: string[] = [];
+  lines.push("Ascend profiling · " + escape(String(p.status)), "");
+  if (p.error) lines.push(escape(String(p.error)), "");
+  if (p.artifactDirectory) lines.push("诊断产物 · " + escape(String(p.artifactDirectory)), "");
+  if (p.traceDirectory) lines.push("服务端 trace · " + escape(String(p.traceDirectory)), "");
+  if (p.worstRankByExposedCommunication) lines.push("未被计算覆盖的通信时间最长的 Rank · " + escape(String(p.worstRankByExposedCommunication)), "");
+  for (const evidence of [p.localMetrics, p.nodeMetrics]) {
+    if (!evidence) continue;
+    const node = expectRecord(evidence, "AgentX node metrics");
+    lines.push("服务节点采样 · " + escape(String(node.endpoint)) + " · " + escape(String(node.status)), "",
+      "| 序列 | 均值 | 峰值 | 计数器增量 | 样本 |", "| --- | ---: | ---: | ---: | ---: |");
+    for (const [series, sample] of Object.entries(expectRecord(node.series, "node metrics series"))) {
+      const r = expectRecord(sample, "node metric");
+      lines.push("| " + [series, r.mean, r.counter ? null : r.peak, r.delta, r.count].map(v => escape(String(v ?? "—"))).join(" | ") + " |");
+    }
+    lines.push("", "未采到的序列 · " + escape(String(node.missing || "—")) + "，抓取失败次数 " + String(node.errors), "");
+  }
+  if (Array.isArray(p.exports)) {
+    lines.push(`诊断轮回放 ${p.traceCount} 棵会话树，完成 ${p.requests} 条请求。`, "");
+    if (p.preset === "timeline" || !p.preset) {
+      lines.push("| Rank 导出 | 设备证据 | 算子 Device (µs) | 算子 Host (µs) | Kernel 数 | Kernel 执行 (µs) | Kernel 等待 (µs) |",
+      "| --- | --- | ---: | ---: | ---: | ---: | ---: |");
+      for (const raw of p.exports) {
+        const rank = expectRecord(raw, "Ascend export");
+        lines.push("| " + [rank.artifactDirectory, rank.deviceEvidence, rank.operatorDeviceUs, rank.operatorHostUs, rank.kernelCount,
+          rank.kernelDurationUs, rank.kernelWaitUs].map(v => escape(String(v ?? "—"))).join(" | ") + " |");
+      }
+      lines.push("");
+    }
+    for (const raw of p.exports) {
+      const rank = expectRecord(raw, "Ascend export");
+      if (rank.counters) {
+        lines.push(`物理 NPU ${rank.physicalDevice} · msprof ${escape(String(p.preset))}`, "",
+          "| CANN 表 / 指标（原始单位） | 导出行均值 | 导出行最大值 | 行数 |", "| --- | ---: | ---: | ---: |");
+        for (const [name, value] of Object.entries(expectRecord(rank.counters, "PMU counters"))) {
+          const r = expectRecord(value, "PMU counter");
+          lines.push("| " + [name, r.mean, r.max, r.count].map(v => escape(String(v))).join(" | ") + " |");
+        }
+        lines.push("");
+        if (rank.hitOverHitsAndMissAllocations) {
+          const ratios = expectRecord(rank.hitOverHitsAndMissAllocations, "cache event fractions");
+          for (const [name, fraction] of Object.entries(ratios)) {
+            lines.push(escape(name) + " · 命中 /（命中 + 缺失后重分配） = " +
+              (typeof fraction === "number" ? number(fraction * 100) + "%" : "—"), "");
+          }
+        }
+      }
+      if (!rank.timeline) continue;
+      const timeline = expectRecord(rank.timeline, "Ascend timeline");
+      lines.push("Rank · " + escape(String(rank.artifactDirectory)), "",
+        "| 计算 (µs) | HCCL (µs) | 重叠 (µs) | 未被计算覆盖的通信 (µs) |", "| ---: | ---: | ---: | ---: |",
+        "| " + [timeline.computeUs, timeline.communicationUs, timeline.overlapUs, timeline.exposedCommunicationUs].map(v => escape(String(v ?? "—"))).join(" | ") + " |", "",
+        "| 热点 | 名称 | 输入 Shape | 次数 | 累计耗时 (µs) |", "| --- | --- | --- | ---: | ---: |");
+      const top = expectRecord(timeline.top, "timeline events");
+      for (const [category, entries] of Object.entries({ "设备算子": rank.topDevice, "算子 / Shape": rank.topShapes,
+        "Runtime": top.runtime, "Memcpy": top.copy, "HCCL": top.communication })) {
+        if (Array.isArray(entries)) for (const entry of entries.slice(0, 10)) {
+          const r = expectRecord(entry, "profile hotspot");
+          lines.push("| " + [category, r.name, r.shape, r.count, r.durationUs ?? r.deviceUs].map(v => escape(String(v ?? "—"))).join(" | ") + " |");
+        }
+      }
+      lines.push("");
+    }
+  }
+  return lines;
+}
+
 export function renderAgentXTables(value: JsonValue | undefined): string[] {
   if (value === undefined) return [];
   const metric = expectRecord(value, "agentx-performance metric");
@@ -15,20 +83,25 @@ export function renderAgentXTables(value: JsonValue | undefined): string[] {
     "会话并发是同时活动的会话树数，实际请求并发可能更高。下表取自正式压测的测量窗口，预热单列。分位数分别属于各测量点。", "",
     "| 测量点 | 状态 | 会话并发 | 场景 / 语料 | 上游有效 | 可比正式结果 | 成功请求 / 错误请求 | 测量秒数 |",
     "| --- | --- | --- | --- | --- | --- | --- | --- |"];
+  const diagnosticOnly = (point: Record<string, unknown>) => Array.isArray(point.collections) &&
+    point.collections.some(c => c?.profiling && c.performanceStatus === undefined);
+  const hasPerformance = metric.points.some(value => !diagnosticOnly(expectRecord(value, "AgentX report point")));
+  if (!hasPerformance) lines.splice(0, lines.length, "## AgentX serving diagnostics", "");
   const summaries = metric.points.map(value => {
     const point = expectRecord(value, "AgentX report point");
     const summary = point.measurement === null ? null : parseAgentXSummary(point.measurement);
-    lines.push(`| ${escape(String(point.taskId))} | ${escape(String(point.status))} | ${summary?.workload.concurrency ?? "—"} | ${summary ? `${summary.workload.mode} / ${summary.workload.variant}` : "—"} | ${summary?.upstreamSubmissionValid ?? "—"} | ${summary?.comparable ?? "—"} | ${number(summary?.profiling.requests?.mean)} / ${number(summary?.profiling.errors?.mean)} | ${number(summary?.profiling.duration?.mean)} |`);
+    if (!diagnosticOnly(point)) lines.push(`| ${escape(String(point.taskId))} | ${escape(String(point.status))} | ${summary?.workload.concurrency ?? "—"} | ${summary ? `${summary.workload.mode} / ${summary.workload.variant}` : "—"} | ${summary?.upstreamSubmissionValid ?? "—"} | ${summary?.comparable ?? "—"} | ${number(summary?.profiling.requests?.mean)} / ${number(summary?.profiling.errors?.mean)} | ${number(summary?.profiling.duration?.mean)} |`);
     return { taskId: String(point.taskId), summary, collections: point.collections };
   });
-  lines.push("", metric.points.length > 1 ? "### 并发点性能对比" : "### 测量点性能", "",
-    "| 测量点 | 会话并发 | 输出吞吐 (tokens/sec) | 总 token 吞吐 (tokens/sec) | TTFT P50 / P95 (ms) | ITL P50 / P95 (ms) | 请求延迟 P95 (ms) |",
-    "| --- | --- | --- | --- | --- | --- | --- |");
+  if (hasPerformance) lines.push("", metric.points.length > 1 ? "### 并发点性能对比" : "### 测量点性能", "",
+    "| 测量点 | 会话并发 | 输出吞吐 (tokens/sec) | 总 token 吞吐 (tokens/sec) | TTFT P50 / P95 (ms) | ITL P50 / P95 (ms) | 请求延迟 P95 (ms) | TPOT P50 / P95 (ms) | 吞吐 (req/s) |",
+    "| --- | --- | --- | --- | --- | --- | --- | --- | --- |");
   for (const { taskId, summary } of summaries) {
+    if (!hasPerformance) continue;
     const stats = summary?.profiling;
-    lines.push(`| ${escape(taskId)} | ${summary?.workload.concurrency ?? "—"} | ${number(stats?.outputThroughput?.mean)} | ${number(stats?.totalThroughput?.mean)} | ${number(stats?.ttft?.p50)} / ${number(stats?.ttft?.p95)} | ${number(stats?.itl?.p50)} / ${number(stats?.itl?.p95)} | ${number(stats?.requestLatency?.p95)} |`);
+    lines.push(`| ${escape(taskId)} | ${summary?.workload.concurrency ?? "—"} | ${number(stats?.outputThroughput?.mean)} | ${number(stats?.totalThroughput?.mean)} | ${number(stats?.ttft?.p50)} / ${number(stats?.ttft?.p95)} | ${number(stats?.itl?.p50)} / ${number(stats?.itl?.p95)} | ${number(stats?.requestLatency?.p95)} | ${number(stats?.tpot?.p50)} / ${number(stats?.tpot?.p95)} | ${number(stats?.requestThroughput?.mean)} |`);
   }
-  const labels: Record<string, string> = { ttft: "TTFT", itl: "ITL", requestLatency: "请求延迟",
+  const labels: Record<string, string> = { ttft: "TTFT", tpot: "TPOT", requestThroughput: "请求吞吐", itl: "ITL", requestLatency: "请求延迟",
     inputThroughput: "输入吞吐", outputThroughput: "输出吞吐", totalThroughput: "总 token 吞吐",
     interactivity: "Interactivity", fullResponseInteractivity: "Full-response Interactivity" };
   const row = (taskId: string, name: string, stat: AgentXStatistic | null | undefined) =>
@@ -37,39 +110,27 @@ export function renderAgentXTables(value: JsonValue | undefined): string[] {
     lines.push("", `### 测量点 ${escape(taskId)}`, "");
     if (Array.isArray(collections)) for (const item of collections) {
       const c = expectRecord(item, "AgentX collection");
-      lines.push("正式压测 · " + escape(String(c.performanceStatus)), "");
+      if (c.performanceStatus !== undefined) lines.push("正式压测 · " + escape(String(c.performanceStatus)), "");
       if (typeof c.performanceDirectory === "string") lines.push("正式产物 · " + escape(c.performanceDirectory), "");
       if (c.engine) {
         const engine = expectRecord(c.engine, "AgentX engine metrics");
         lines.push("推理引擎指标 · " + escape(String(engine.status)), "",
-          "| 指标 | 压测前 | 压测后 | 计数器增量 |", "| --- | ---: | ---: | ---: |");
+          "| 指标 | 压测前 | 压测后 | Gauge 均值 | Gauge 峰值 | 计数器增量 | 样本 |", "| --- | ---: | ---: | ---: | ---: | ---: | ---: |");
         for (const raw of Array.isArray(engine.series) ? engine.series : []) {
           const r = expectRecord(raw, "engine series");
-          lines.push("| " + [r.series, r.before, r.after, r.delta].map(v => escape(String(v ?? "—"))).join(" | ") + " |");
+          lines.push("| " + [r.series, r.before, r.after, r.mean, r.peak, r.delta, r.samples].map(v => escape(String(v ?? "—"))).join(" | ") + " |");
         }
         lines.push("");
+        if (engine.rawSeries) lines.push("原始时序 · " + escape(String(engine.rawSeries)), "");
         if (Array.isArray(engine.missing) && engine.missing.length) lines.push("缺少指标 " + escape(engine.missing.join(", ")), "");
         if (Array.isArray(engine.errors)) for (const error of engine.errors) lines.push(escape(String(error)), "");
       }
       if (c.profiling) {
         const p = expectRecord(c.profiling, "AgentX profiling");
-        lines.push("Ascend profiling · " + escape(String(p.status)), "");
-        if (p.error) lines.push(escape(String(p.error)), "");
-        if (p.artifactDirectory) lines.push("诊断产物 · " + escape(String(p.artifactDirectory)), "");
-        if (p.traceDirectory) lines.push("服务端 trace · " + escape(String(p.traceDirectory)), "");
-        if (Array.isArray(p.exports)) {
-          lines.push(`诊断轮回放 ${p.traceCount} 棵会话树，完成 ${p.requests} 条请求。`, "",
-            "| Rank 导出 | 设备证据 | 算子 Device (µs) | 算子 Host (µs) | Kernel 数 | Kernel 执行 (µs) | Kernel 等待 (µs) |",
-            "| --- | --- | ---: | ---: | ---: | ---: | ---: |");
-          for (const raw of p.exports) {
-            const rank = expectRecord(raw, "Ascend export");
-            lines.push("| " + [rank.artifactDirectory, rank.deviceEvidence, rank.operatorDeviceUs, rank.operatorHostUs, rank.kernelCount,
-              rank.kernelDurationUs, rank.kernelWaitUs].map(v => escape(String(v ?? "—"))).join(" | ") + " |");
-          }
-          lines.push("");
-        }
+        lines.push(...renderDiagnostics(p));
       }
     }
+    if (!summary && !hasPerformance) continue;
     if (!summary) {
       lines.push("暂无有效测量摘要；状态见上方测量点表。推理服务与硬件指标采集状态未知。", "");
       continue;
@@ -166,7 +227,7 @@ export function renderAgentXTables(value: JsonValue | undefined): string[] {
         lines.push("");
       }
       lines.push("监控缺失或告警不改变请求吞吐、延迟和 Harness 的测评有效性；使用硬件统计时需同时核对可用样本和采集问题。", "");
-    } else {
+    } else if (!summary.workload.collection) {
       lines.push("采集状态：推理服务未启用；硬件指标未启用。", "");
     }
   }

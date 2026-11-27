@@ -127,12 +127,16 @@ export class AgentXReplaySolver implements Solver {
     try {
       let summary: AgentXSummary;
       if (profile) {
+        const warmup = async () => {
+          await this.executeMeasurement({ ...input, payload: { ...workload, concurrency: 1, traceCount: 1 } },
+            session, python, runner, lexicon, context, binding, undefined, true);
+        };
         const captured = await captureAgentXProfile({
           endpoint: expectNonEmptyString(binding.model.endpoint, "AgentX profiling service"), key: binding.auth.value,
-          directory: profile.traceDirectory, destination: join(root, "profiling", point, "trace"),
+          ...profile, directory: profile.traceDirectory, destination: join(root, "profiling", point, "trace"),
           exportTimeoutSeconds: profile.exportTimeoutSeconds, signal: context.signal,
           ...(this.config.pythonExecutable ? { pythonExecutable: this.config.pythonExecutable } : {}),
-        }, measure);
+        }, measure, profile.provider ? warmup : undefined);
         summary = captured.measurement;
         summary.deviceProfile = collectionEvidence(captured.profile, "profiling");
       } else {
@@ -162,7 +166,7 @@ export class AgentXReplaySolver implements Solver {
   }
 
   private async executeMeasurement(input: PublicTask, session: EnvironmentSession, python: string, runner: string,
-    lexicon: AgentXLexicon, context: AttemptContext, binding: ServiceBinding, sampling?: HostNpuSampling) {
+    lexicon: AgentXLexicon, context: AttemptContext, binding: ServiceBinding, sampling?: HostNpuSampling, warmup = false) {
     const workload = parseWorkload(input.payload);
     const diagnostic = workload.collection?.type === "profiling";
     const configured = binding.model.endpoint;
@@ -173,15 +177,15 @@ export class AgentXReplaySolver implements Solver {
     const tokenizerPath = this.runtime.environmentName === "local" ? join(session.workdir, "agentx-tokenizer") : posix.join(session.workdir, "agentx-tokenizer");
     const request = { schemaVersion: 1, key: context.key, workload, ...endpoint,
       ...(workload.collection?.type === "performance" && workload.collection.engineMetrics ? { engineMetrics: {
-        names: workload.collection.engineMetrics, apiKey: binding.auth.value,
+        sampleWindow: workload.collection.sampleWindow, names: workload.collection.engineMetrics, apiKey: binding.auth.value,
         endpoint: endpoint.url + endpoint.endpoint.replace(/(?:\/v1)?\/chat\/completions$/u, "") } } : {}),
-      ...(this.config.networkLatency === undefined ? {} : { networkLatency: this.config.networkLatency }),
+      ...(diagnostic || this.config.networkLatency === undefined ? {} : { networkLatency: this.config.networkLatency }),
       ...(diagnostic || this.config.telemetry === undefined ? {} : { telemetry: this.config.telemetry }),
       ...(sampling ? { hostAscend: sampling.targets } : {}),
       model: binding.model.name, auth: binding.auth, tokenizerPath, trustRemoteCode: this.config.trustRemoteCode,
-      ...(this.binding.model.reasoningEffort === undefined ? {} : { reasoningEffort: this.binding.model.reasoningEffort }),
-      artifactDir: this.runtime.environmentName === "local" ? join(session.workdir, "agentx-artifacts") : posix.join(session.workdir, "agentx-artifacts"),
-      outputDir: session.agentOutputDir, ...(this.config.requestTimeoutSeconds === undefined ? {} : { requestTimeoutSeconds: this.config.requestTimeoutSeconds }) };
+      ...(binding.model.reasoningEffort === undefined ? {} : { reasoningEffort: binding.model.reasoningEffort }),
+      artifactDir: this.runtime.environmentName === "local" ? join(session.workdir, warmup ? "agentx-warmup" : "agentx-artifacts") : posix.join(session.workdir, warmup ? "agentx-warmup" : "agentx-artifacts"),
+      outputDir: warmup ? posix.join(session.agentOutputDir, "warmup") : session.agentOutputDir, ...(this.config.requestTimeoutSeconds === undefined ? {} : { requestTimeoutSeconds: this.config.requestTimeoutSeconds }) };
     const handle = await session.start({ executable: python, args: [runner], cwd: session.workdir,
       env: { PYTHONDONTWRITEBYTECODE: "1", PYTHONUNBUFFERED: "1", PYTHONIOENCODING: "utf-8", PYTHONUTF8: "1" }, input: Buffer.from(JSON.stringify(request)) }, context.signal);
     try {
@@ -216,7 +220,7 @@ export class AgentXReplaySolver implements Solver {
       const terminal = expectRecord(JSON.parse(lines[0] ?? ""), "AgentX terminal result");
       if (terminal.schemaVersion !== 1 || terminal.type !== "result") throw new TypeError("AgentX bridge returned no measurement");
       const summary = normalizeAgentXExport(terminal.export, workload, { source: lexicon.source, revision: lexicon.revision, digest: lexicon.digest }, terminal.replayCoverage,
-        this.config.networkLatency === undefined ? undefined : { config: this.config.networkLatency, probes: terminal.networkLatencyProbes });
+        diagnostic || this.config.networkLatency === undefined ? undefined : { config: this.config.networkLatency, probes: terminal.networkLatencyProbes });
       let telemetry = terminal.telemetry;
       if (sampling) telemetry = { ...expectRecord(telemetry, "host telemetry evidence"), localAscend: await sampling.finish() };
       if (this.config.telemetry && !diagnostic) summary.telemetry = normalizeTelemetry(this.config.telemetry, binding.model.name, telemetry);

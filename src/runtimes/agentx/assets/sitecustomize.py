@@ -2,6 +2,21 @@
 
 import os
 
+# AgentX 1.0.7 resolves absolute tokenizer paths as Hub IDs when offline.
+# Weka also starts fresh interpreters to reconstruct trees with this tokenizer.
+staged = os.environ.get("EVALUATOR_AGENTX_TOKENIZER")
+if staged:
+    from aiperf.common.tokenizer import Tokenizer
+
+    resolve_snapshot = Tokenizer._resolve_local_snapshot
+
+    def local_snapshot(cls, name, revision):
+        if str(name) == staged:
+            return staged
+        return resolve_snapshot(name, revision)
+
+    Tokenizer._resolve_local_snapshot = classmethod(local_snapshot)
+
 effort = os.environ.get("EVALUATOR_AGENTX_REASONING_EFFORT")
 if effort:
     try:

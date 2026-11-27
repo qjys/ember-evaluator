@@ -2,8 +2,19 @@ import { isAbsolute, posix } from "node:path";
 import type { JsonValue } from "../../../../../core/contracts/task.js";
 import { assertJsonValue, expectNonEmptyString, expectPositiveInteger, expectRecord, rejectUnknown } from "../../../../../core/validation/input.js";
 
-export type AgentXProfileConfig = { traceDirectory: string; service?: string; traceCount?: number; exportTimeoutSeconds: number };
-export type AgentXCollection = { type: "performance"; engineMetrics?: string[] } | { type: "profiling"; profiling: AgentXProfileConfig };
+export type AgentXProfileConfig = {
+  provider?: "vllm" | "sglang";
+  preset?: "timeline" | "compute" | "bandwidth" | "cache";
+  devices?: number[];
+  nodeMetrics?: { endpoint: string; names: string[] };
+  analysisPython?: string;
+  samplerPython?: string;
+  traceDirectory: string;
+  service?: string;
+  traceCount?: number;
+  exportTimeoutSeconds: number;
+};
+export type AgentXCollection = { type: "performance"; sampleWindow?: true; engineMetrics?: string[] } | { type: "profiling"; profiling: AgentXProfileConfig };
 
 export function parseEngineMetrics(value: unknown): string[] {
   if (!Array.isArray(value) || !value.length || !value.every((name): name is string =>
@@ -12,13 +23,36 @@ export function parseEngineMetrics(value: unknown): string[] {
   return value;
 }
 
-export function parseProfileConfig(value: unknown): AgentXProfileConfig {
+export function parseProfileConfig(value: unknown, defaultProvider?: "vllm"): AgentXProfileConfig {
   const v = expectRecord(value, "agentx.profiling");
-  rejectUnknown(v, ["traceDirectory", "service", "traceCount", "exportTimeoutSeconds"], "agentx.profiling");
+  rejectUnknown(v, ["traceDirectory", "service", "traceCount", "exportTimeoutSeconds", "provider", "preset", "devices", "nodeMetrics", "analysisPython", "samplerPython"], "agentx.profiling");
   const traceDirectory = expectNonEmptyString(v.traceDirectory, "profiling.traceDirectory");
   if (!(isAbsolute(traceDirectory) || posix.isAbsolute(traceDirectory)) || /[\r\n\0]/u.test(traceDirectory) || traceDirectory.split(/[/\\]/u).includes(".."))
     throw new TypeError("profiling.traceDirectory must be an absolute shared path");
-  return { traceDirectory, exportTimeoutSeconds: expectPositiveInteger(v.exportTimeoutSeconds ?? 1800, "profiling.exportTimeoutSeconds"),
+  const provider = v.provider ?? defaultProvider;
+  if (provider !== undefined && provider !== "vllm" && provider !== "sglang") throw new TypeError("profiling.provider must be vllm or sglang");
+  const preset = v.preset;
+  if (preset !== undefined && preset !== "timeline" && preset !== "compute" && preset !== "cache" && preset !== "bandwidth")
+    throw new TypeError("profiling.preset must be timeline, compute, bandwidth or cache");
+  const devices = v.devices;
+  if (devices !== undefined && (!Array.isArray(devices) || !devices.length || devices.some(d => !Number.isSafeInteger(d) || d < 0) ||
+    new Set(devices).size !== devices.length)) throw new TypeError("profiling.devices requires distinct physical NPU IDs");
+  if (preset && preset !== "timeline" && !devices) throw new TypeError("msprof presets require profiling.devices on the service host");
+  let nodeMetrics: AgentXProfileConfig["nodeMetrics"];
+  if (v.nodeMetrics !== undefined) {
+    const node = expectRecord(v.nodeMetrics, "profiling.nodeMetrics");
+    rejectUnknown(node, ["endpoint", "names"], "profiling.nodeMetrics");
+    const endpoint = expectNonEmptyString(node.endpoint, "profiling.nodeMetrics.endpoint");
+    const url = new URL(endpoint);
+    if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.search || url.hash)
+      throw new TypeError("profiling.nodeMetrics.endpoint must be a credential-free HTTP(S) exporter URL");
+    nodeMetrics = { endpoint, names: parseEngineMetrics(node.names) };
+  }
+  return { traceDirectory, ...(provider ? { provider } : {}), ...(preset ? { preset } : {}),
+    ...(devices ? { devices } : {}), ...(nodeMetrics ? { nodeMetrics } : {}),
+    ...(v.samplerPython === undefined ? {} : { samplerPython: expectNonEmptyString(v.samplerPython, "profiling.samplerPython") }),
+    ...(v.analysisPython === undefined ? {} : { analysisPython: expectNonEmptyString(v.analysisPython, "profiling.analysisPython") }),
+    exportTimeoutSeconds: expectPositiveInteger(v.exportTimeoutSeconds ?? 1800, "profiling.exportTimeoutSeconds"),
     ...(v.traceCount === undefined ? {} : { traceCount: expectPositiveInteger(v.traceCount, "profiling.traceCount") }),
     ...(v.service === undefined ? {} : { service: expectNonEmptyString(v.service, "profiling.service") }) };
 }
@@ -29,9 +63,10 @@ export function parseCollection(value: unknown): AgentXCollection {
     rejectUnknown(v, ["type", "profiling"], "AgentX profiling collection");
     return { type: "profiling", profiling: parseProfileConfig(v.profiling) };
   }
-  rejectUnknown(v, ["type", "engineMetrics"], "AgentX performance collection");
+  rejectUnknown(v, ["type", "engineMetrics", "sampleWindow"], "AgentX performance collection");
   if (v.type !== "performance") throw new TypeError("Invalid AgentX collection");
-  return { type: "performance", ...(v.engineMetrics === undefined ? {} : { engineMetrics: parseEngineMetrics(v.engineMetrics) }) };
+  if (v.sampleWindow !== undefined && v.sampleWindow !== true) throw new TypeError("Invalid AgentX sampleWindow");
+  return { type: "performance", ...(v.sampleWindow ? { sampleWindow: true } : {}), ...(v.engineMetrics === undefined ? {} : { engineMetrics: parseEngineMetrics(v.engineMetrics) }) };
 }
 
 export function collectionEvidence(value: unknown, kind: "engine" | "profiling"): Record<string, JsonValue> {
@@ -41,9 +76,10 @@ export function collectionEvidence(value: unknown, kind: "engine" | "profiling")
     if (!["measured", "partial"].includes(String(raw.status)) || !Array.isArray(raw.series) ||
         !Array.isArray(raw.missing) || !Array.isArray(raw.errors)) throw new TypeError("Invalid AgentX engine metrics");
   } else {
-    if (!["measured", "host-only"].includes(String(raw.status)) || !Array.isArray(raw.exports) || raw.exports.length === 0 ||
+    if (!["measured", "host-only", "partial"].includes(String(raw.status)) || !Array.isArray(raw.exports) || raw.exports.length === 0 ||
         typeof raw.traceDirectory !== "string") throw new TypeError("Invalid AgentX profile");
     const flags = raw.exports.map(item => expectRecord(item, "Ascend export").deviceEvidence);
+    if (raw.status === "partial" && !["compute", "cache", "bandwidth"].includes(String(raw.preset))) throw new TypeError("Invalid partial hardware profile");
     if (flags.some(flag => typeof flag !== "boolean") || (raw.status === "measured") !== flags.every(flag => flag === true))
       throw new TypeError("Invalid Ascend device evidence");
   }

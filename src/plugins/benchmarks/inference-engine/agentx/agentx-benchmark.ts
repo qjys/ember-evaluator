@@ -20,6 +20,7 @@ import { parseAgentXSummary, successfulAgentXWindow, type AgentXMode, type Agent
 import { parseTelemetryConfig } from "./evidence/telemetry.js";
 
 export type AgentXConfig = {
+  measurementMode?: "performance" | "profiling" | "all";
   profiling?: AgentXProfileConfig;
   engineMetrics?: string[];
   variant: AgentXVariant;
@@ -35,7 +36,7 @@ export type AgentXConfig = {
 
 export function parseAgentXConfig(value: unknown): AgentXConfig {
   const v = expectRecord(value, "agentx");
-  rejectUnknown(v, ["variant", "mode", "concurrency", "durationSeconds", "seed", "traceCount", "cacheDir", "hfToken", "localPath", "engineMetrics", "profiling"], "agentx");
+  rejectUnknown(v, ["variant", "mode", "concurrency", "durationSeconds", "seed", "traceCount", "cacheDir", "hfToken", "localPath", "engineMetrics", "profiling", "measurementMode"], "agentx");
   if (v.variant !== undefined && v.variant !== "256k" && v.variant !== "full") throw new TypeError("agentx.variant must be 256k or full");
   if (v.mode !== undefined && !["standard", "replay"].includes(String(v.mode))) throw new TypeError("agentx.mode must be standard or replay");
   const mode = v.mode === "replay" ? "replay" : "standard";
@@ -50,12 +51,21 @@ export function parseAgentXConfig(value: unknown): AgentXConfig {
   const traceCount = mode === "replay" ? expectPositiveInteger(v.traceCount, "agentx.traceCount") : undefined;
   if (mode !== "replay" && v.traceCount !== undefined) throw new TypeError("agentx.traceCount requires mode=replay");
   if (traceCount !== undefined && concurrency.some(n => n > traceCount)) throw new TypeError("AgentX replay concurrency must not exceed traceCount");
-  const profiling = v.profiling === undefined ? undefined : parseProfileConfig(v.profiling);
+  const measurementMode = v.measurementMode;
+  if (measurementMode !== undefined && measurementMode !== "performance" && measurementMode !== "profiling" && measurementMode !== "all")
+    throw new TypeError("agentx.measurementMode must be performance, profiling or all");
+  const configuredProfile = v.profiling === undefined ? undefined : parseProfileConfig(v.profiling, measurementMode ? "vllm" : undefined);
+  const profiling = measurementMode === "performance" ? undefined : configuredProfile;
+  if ((measurementMode === "profiling" || measurementMode === "all") && !profiling)
+    throw new TypeError("agentx.profiling is required for the selected measurementMode");
+  const engineMetrics = v.engineMetrics === undefined ? measurementMode && measurementMode !== "profiling" ?
+    (configuredProfile?.provider === "sglang" ? ["sglang:token_usage", "sglang:num_running_reqs", "sglang:num_queue_reqs"] :
+      ["vllm:kv_cache_usage_perc", "vllm:num_requests_running", "vllm:num_requests_waiting"]) : undefined : parseEngineMetrics(v.engineMetrics);
   const profileTrees = profiling?.traceCount;
   if (profileTrees !== undefined && (concurrency.some(n => n > profileTrees) || (traceCount !== undefined && profileTrees > traceCount)))
     throw new TypeError("profiling.traceCount must cover every concurrency and fit the replay selection");
   return { ...localDatasetConfig(v), variant: v.variant === "full" ? "full" : "256k", mode, concurrency, durationSeconds, seed: Number(seed),
-    ...(profiling ? { profiling } : {}), ...(v.engineMetrics === undefined ? {} : { engineMetrics: parseEngineMetrics(v.engineMetrics) }),
+    ...(profiling ? { profiling } : {}), ...(engineMetrics ? { engineMetrics } : {}), ...(measurementMode ? { measurementMode } : {}),
     ...(traceCount === undefined ? {} : { traceCount }),
     cacheDir: expectNonEmptyString(v.cacheDir ?? ".cache/agentx", "agentx.cacheDir"),
     ...(v.hfToken === undefined ? {} : { hfToken: expectNonEmptyString(v.hfToken, "agentx.hfToken") }) };
@@ -109,7 +119,7 @@ export class AgentXBenchmark implements Benchmark {
   }
 
   async *enumerate(_source: SourceLock, signal: AbortSignal): AsyncIterable<TaskRef> {
-    for (const concurrency of this.config.concurrency) {
+    if (this.config.measurementMode !== "profiling") for (const concurrency of this.config.concurrency) {
       signal.throwIfAborted();
       yield { id: this.id(concurrency), recordKey: { concurrency } };
     }
@@ -122,7 +132,7 @@ export class AgentXBenchmark implements Benchmark {
   async validatePrerequisites(ref: TaskRef, snapshot: () => Promise<ResultSnapshot>): Promise<void> {
     if (!this.config.profiling || !ref.id.endsWith("-profiling")) return;
     const { records } = await snapshot();
-    for (const concurrency of this.config.concurrency) {
+    if (this.config.measurementMode !== "profiling") for (const concurrency of this.config.concurrency) {
       const record = records.find(r => r.key.taskId === this.id(concurrency));
       if (!record || !isEvaluationComplete(record) || record.collection.artifacts !== "complete" ||
           record.collection.trajectory !== "complete") throw new Error(`Profiling skipped: incomplete performance at concurrency ${concurrency}`);
@@ -143,7 +153,7 @@ export class AgentXBenchmark implements Benchmark {
     const key = expectRecord(ref.recordKey, "AgentX task key");
     const concurrency = expectPositiveInteger(key.concurrency, "AgentX task concurrency");
     const diagnostic = !!this.config.profiling && ref.id === this.id(concurrency) + "-profiling";
-    if (!this.config.concurrency.includes(concurrency) || (!diagnostic && ref.id !== this.id(concurrency))) throw new TypeError("Invalid AgentX point selection");
+    if (!this.config.concurrency.includes(concurrency) || (!diagnostic && (this.config.measurementMode === "profiling" || ref.id !== this.id(concurrency)))) throw new TypeError("Invalid AgentX point selection");
     const file = source.files.find(file => file.path === "traces.jsonl");
     const metadata = expectRecord(source.metadata, "AgentX source metadata");
     if (!file || source.files.length !== 1 || metadata.dataset !== this.dataset || !/^(?:[a-f0-9]{40}|local:[a-f0-9]{64})$/u.test(source.revision))
@@ -159,7 +169,7 @@ export class AgentXBenchmark implements Benchmark {
       ...(this.config.traceCount === undefined ? {} : { traceCount: this.config.traceCount }),
       ...(diagnostic && this.config.profiling ? { mode: "replay", traceCount: this.config.profiling.traceCount ?? concurrency,
         collection: { type: "profiling", profiling: this.config.profiling } } :
-        this.config.profiling || this.config.engineMetrics ? { collection: { type: "performance",
+        this.config.profiling || this.config.engineMetrics ? { collection: { type: "performance", ...(this.config.measurementMode ? { sampleWindow: true as const } : {}),
           ...(this.config.engineMetrics ? { engineMetrics: this.config.engineMetrics } : {}) } } : {}) };
     return { input: { id: ref.id, prompt: `AgentX ${this.config.variant} ${this.config.mode}: ${concurrency} concurrent session trees`, payload },
       verification: payload, solveEnv: { workdir: ".", image: null, initialFiles: [{ source: tracePath, target: payload.tracePath }],

@@ -152,6 +152,8 @@ function parseMsprofAttempt(value: unknown): AgentXMsprofAttempt {
 const fields: Record<string, { tag: string; unit: string }> = {
   ttft: { tag: "time_to_first_token", unit: "ms" },
   ttfo: { tag: "time_to_first_output_token", unit: "ms" },
+  requestThroughput: { tag: "request_throughput", unit: "requests/sec" },
+  tpot: { tag: "time_per_output_token", unit: "ms" },
   itl: { tag: "inter_token_latency", unit: "ms" },
   requestLatency: { tag: "request_latency", unit: "ms" },
   inputThroughput: { tag: "input_token_throughput", unit: "tokens/sec" },
@@ -196,7 +198,7 @@ function savedStatistics(value: unknown, definitions = fields): AgentXStatistics
   return Object.fromEntries(Object.entries(definitions).map(([name, { unit }]) => {
     const item = stats[name];
     // TTFO was added after the initial persisted summary format.
-    if (item === null || (name === "ttfo" && item === undefined)) return [name, null];
+    if (item === null || (["ttfo", "requestThroughput", "tpot"].includes(name) && item === undefined)) return [name, null];
     const stat = expectRecord(item, `AgentX statistic ${name}`);
     if (stat.unit !== unit) throw new TypeError(`Invalid AgentX statistic unit: ${name}`);
     const count = nullableNumber(stat.count);

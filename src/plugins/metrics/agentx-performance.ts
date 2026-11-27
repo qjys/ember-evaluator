@@ -27,7 +27,7 @@ export class AgentXPerformanceMetrics implements Metrics {
       const record = byTask.get(id);
       return record ? `tasks/${safeTaskKey(id)}/attempts/${record.key.attemptId}/artifacts/agentx/${tail}` : null;
     };
-    const points = snapshot.run.taskIds.filter(id => !id.endsWith("-profiling")).map(taskId => {
+    const points = [...new Set(snapshot.run.taskIds.map(id => id.replace(/-profiling$/u, "")))].map(taskId => {
       const point = load(taskId);
       const summary = point.measurement;
       const diagnosticId = taskId + "-profiling";
@@ -44,6 +44,8 @@ export class AgentXPerformanceMetrics implements Metrics {
       const profiling = hasProfile ? { ...(diagnostic?.deviceProfile ?? { status: missingStatus, ...(error ? { error } : {}) }),
         artifactDirectory: diagnostic?.deviceProfile ? artifact(diagnosticId, `profiling/point-${batch}`) : null,
         traceCount: diagnostic?.workload.traceCount ?? null, requests: diagnostic?.replayCoverage?.successfulRequests ?? null } : undefined;
+      if (!selected.has(taskId)) return { taskId, measurement: null, status: diagnostic?.deviceProfile?.status ?? missingStatus,
+        collections: [{ concurrency: batch, dataset: diagnostic?.workload.dataset ?? null, ...(profiling ? { profiling } : {}) }] };
       const performanceStatus = summary ? successfulAgentXWindow(summary) ?
         "measured" : "partial" : point.status;
       const complete = performanceStatus === "measured" && (!summary?.engine || summary.engine.status === "measured") &&

@@ -41,7 +41,7 @@ def run():
     from local_telemetry import LocalTelemetry
     from engine_metrics import standard_metrics_source
     engine = request.get("engineMetrics")
-    source = standard_metrics_source(engine) if engine and request["workload"]["mode"] == "standard" else nullcontext()
+    source = standard_metrics_source(engine) if engine and (engine.get("sampleWindow") or request["workload"]["mode"] == "standard") else nullcontext()
     with source as metrics_source, LocalTelemetry(request.get("telemetry", {}), Path(request["artifactDir"]), request.get("hostAscend")) as telemetry:
         metrics_url, counters = metrics_source or (None, set())
         run_measurement(request, telemetry, metrics_url, counters)
@@ -117,17 +117,20 @@ def run_measurement(request, telemetry, metrics_url, counters):
                  "--request-count", str(sum(len(keys) for keys in expected.values())),
                  "--trajectory-start-min-ratio", "0", "--trajectory-start-max-ratio", "0"]
     environment = {**os.environ, "EVALUATOR_AGENTX_API_KEY": request["auth"]["value"],
+                   "EVALUATOR_AGENTX_TOKENIZER": request["tokenizerPath"],
                    "EVALUATOR_AGENTX_SOURCE": json.dumps({"path": str(Path(workload["tracePath"]).resolve()),
                                                           "dataset": workload["dataset"], "sha256": workload["sha256"]}),
                    "PYTHONDONTWRITEBYTECODE": "1", "PYTHONUNBUFFERED": "1", "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"}
     if request.get("reasoningEffort") is not None:
         args += ["--extra-inputs", f"reasoning_effort:{request['reasoningEffort']}"]
         environment["EVALUATOR_AGENTX_REASONING_EFFORT"] = request["reasoningEffort"]
-        environment["PYTHONPATH"] = os.pathsep.join(
-            filter(None, [str(Path(__file__).resolve().parent), environment.get("PYTHONPATH")])
-        )
+    environment["PYTHONPATH"] = os.pathsep.join(
+        filter(None, [str(Path(__file__).resolve().parent), environment.get("PYTHONPATH")])
+    )
     if expected is not None:
         environment["EVALUATOR_AGENTX_FULL_REPLAY"] = "1"
+    if (request.get("engineMetrics") or {}).get("sampleWindow"):
+        environment["AIPERF_SERVER_METRICS_COLLECTION_INTERVAL"] = "1"
     if endpoints:
         environment["EVALUATOR_AGENTX_TELEMETRY"] = "1"
     child = None
@@ -209,6 +212,9 @@ def run_measurement(request, telemetry, metrics_url, counters):
                                 successes += 1
             if successes and successes == raw.get("request_count", {}).get("avg"):
                 raw["error_request_count"] = {"unit": "requests", "avg": failures}
+        if workload.get("collection", {}).get("type") == "performance" and not raw.get("time_per_output_token"):
+            from request_statistics import per_request_tpot
+            raw["time_per_output_token"] = per_request_tpot(artifacts)
         terminal = {"schemaVersion": 1, "type": "result", "export": raw}
         if engine:
             terminal["engine"] = (standard_engine_result(artifacts, metrics_url, engine["names"], counters) if metrics_url else

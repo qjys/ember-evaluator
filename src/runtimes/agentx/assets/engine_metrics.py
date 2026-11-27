@@ -122,6 +122,8 @@ def standard_engine_result(artifacts, endpoint, names, declared):
         first, last, counters = {}, {}, set()
         samples_seen = 0
         resets = set()
+        aggregates = {}
+        previous_values = {}
         with source_file.open(encoding="utf-8") as source:
             for line in source:
                 row = json.loads(line)
@@ -144,7 +146,13 @@ def standard_engine_result(artifacts, endpoint, names, declared):
                         labels = ",".join(k + "=" + json.dumps(v) for k, v in sorted((sample.get("labels") or {}).items()))
                         series = name + ("{" + labels + "}" if labels else "")
                         snapshot[series] = (name, value)
-                        if counter and series in last and last[series][1] > value:
+                        agg = aggregates.setdefault(series, {"samples": 0, "sum": 0, "peak": value})
+                        agg["samples"] += 1
+                        agg["sum"] += value
+                        agg["peak"] = max(agg["peak"], value)
+                        previous_value = previous_values.get(series)
+                        previous_values[series] = value
+                        if counter and previous_value is not None and previous_value > value:
                             resets.add(series)
                 if samples_seen == 1:
                     first = snapshot
@@ -152,6 +160,20 @@ def standard_engine_result(artifacts, endpoint, names, declared):
         if samples_seen < 2:
             last = {}
         result = engine_result(names, ((first, counters), None), ((last, counters), None))
+        series_by_name = {row["series"]: row for row in result["series"]}
+        for key, agg in aggregates.items():
+            if key not in series_by_name:
+                row = {"series": key, "before": None, "after": None}
+                result["series"].append(row)
+            else:
+                row = series_by_name[key]
+            row["samples"] = agg["samples"]
+            if key.split("{", 1)[0] not in counters:
+                row.update(mean=agg["sum"] / agg["samples"], peak=agg["peak"])
+            if agg["samples"] < samples_seen:
+                result["status"] = "partial"
+        result.update(rawSeries=source_file.relative_to(artifacts).as_posix(),
+                      window={"startNs": str(start), "endNs": str(end)}, samples=samples_seen)
         for series in result["series"]:
             if series["series"] in resets:
                 result["status"] = "partial"

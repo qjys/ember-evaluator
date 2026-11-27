@@ -246,20 +246,38 @@ New results use telemetry v2 with multiple devices/chips and empty endpoints aft
 
 Adapters store cumulative upstream collection errors as `evaluator_collection_error_count` in raw exports and optional `telemetry.collectionErrors` in summaries. This endpoint-total count appears once, is not assigned per source, and does not automatically mark all sources partial. Historical absence means unrecorded, not zero.
 
-## Collecting performance and server profiles in one run
+## Switching between performance and service diagnostics
 
-Start an Ascend inference service that supports streaming Chat Completions, Prometheus `/metrics`, SGLang `/start_profile` and `/stop_profile`, and automatic NPU profile export. Mount `profiling.traceDirectory` read-write at the same absolute path on both the service and the evaluator coordinator, including its management container if used. The coordinator requires Python 3.11–3.13 to read exports. Set the service and tokenizer variables from the quick start, then run:
+Set `benchmark.config.measurementMode` in the [tuning playbook](../../../playbook/agentx/agentx-service-profiling.yaml). Once the service, tokenizer and shared directory are configured, this field selects the run.
+
+| Mode | Work at each concurrency | Results |
+| --- | --- | --- |
+| `performance` | Run the formal load with the service profiler idle | Request and token throughput, TTFT, per-request TPOT, ITL, latency, KV cache and queue samples |
+| `profiling` | Warm up with one tree, then profile one bounded replay | Diagnostic evidence and paths to raw exports |
+| `all` | Complete every formal point, then profile each concurrency | One report pairs both passes. Successful formal results survive diagnostic failures. |
 
 ```bash
 arsi-evaluator run playbook/agentx/agentx-service-profiling.yaml
 ```
 
-The [service profiling example](../../../playbook/agentx/agentx-service-profiling.yaml) first replays the same eight complete session trees at concurrency 1 and 8. Both runs send real inference requests and supply the throughput, TTFT, ITL and request latency for the report. Only after both succeed does the evaluator enable the service profiler for a bounded replay at each concurrency, stop it and collect each rank’s export. The service stays running throughout. Diagnostic traffic and profiler overhead are excluded from the formal results.
+The example replays the same eight trees at concurrency 1 and 8. Diagnostics default to one complete tree per lane. Set `profiling.traceCount: 8` to use eight in both diagnostics. A tree can send multiple requests. Standard workloads keep native warmup and timing for the formal pass. TPOT uses (request latency − TTFT) / (output tokens − 1) for successful formal requests with at least two output tokens.
 
-By default diagnostics replay one tree per concurrency lane. Set `profiling.traceCount: 8` to replay eight trees in both diagnostics. Each tree can contain multiple requests and subagents. With the standard scenario the formal run retains native warmup and timing, and diagnostics still use bounded replay. Optional `profiling.service` selects a second entry in `services` serving the same model.
+The formal pass scrapes the service's `/metrics` every second. Raw JSONL preserves the native measurement window. The default vLLM samples cover KV cache occupancy and running and waiting requests. Override the names with `engineMetrics`. Each label set has gauge mean, peak and sample count, or a counter delta. Missing samples and counter resets yield partial evidence. Existing experiments without the selector retain their original pass selection and sampling.
 
-Set `engineMetrics` to actual Prometheus sample names. Replay takes snapshots before and after each formal load. Standard uses the first and last samples within the native measurement window. The report preserves label sets and gives deltas for counters; missing readings or counter resets yield a partial result. Specifying only `engineMetrics` runs only the formal phase. Replace retired `solver.config.telemetry.msprof` settings with `benchmark.config.profiling`. Historical reports remain readable. The service export provides operator and kernel timings; it does not reproduce the old `mac_fp16_ratio` hardware counter.
+| `profiling.preset` | Setup and evidence |
+| --- | --- |
+| `timeline` (default) | Enable the vLLM Ascend torch profiler. Set `torch_profiler_dir` in the service's `--profiler-config` and YAML `traceDirectory` to the same shared path. The evaluator calls `/start_profile` and `/stop_profile` and reads newly created ranks. With `provider: sglang` the service receives a per-window output directory. |
+| `compute` | Run on the serving host with a loopback inference endpoint, CANN's `msprof` and `npu-smi` on PATH, and explicit physical `devices`. PipeUtilization reports available Cube, Vector and MTE counters. |
+| `bandwidth`, `cache` | The same setup captures on-chip memory bandwidth or L2Cache statistics. Available fields depend on the device and CANN. Each diagnostic selects one preset. If CANN only exports hits and reallocations on misses, the report preserves those counts and labels the derived fraction as hits / (hits + miss allocations). |
 
-Each run writes one `report.md` and `metrics.json`. Follow the point paths in the report to the matching attempt. Formal Harness output is in `artifacts/agentx/outputs/point-<concurrency>/`. Inside the diagnostic attempt’s `artifacts/agentx/profiling/point-<concurrency>/`, `outputs/` contains the replay and `trace/` contains selected per-rank export files. Each collected attempt writes `artifacts/agentx/collections.json`. The full raw trace stays on the shared mount. Exports with host activity alone are marked `host-only`. Failures to control the profiler or collect an export are reported separately from completed formal measurements.
+PMU counters cover the full profiler window, including replay-client setup and drain. The report separates AI Core and Vector Core tables and keeps the HBM average and individual channels distinct. Counts in these tables refer to exported CANN rows.
+
+Timeline evidence includes per-rank operators and input shapes when exported, runtime APIs, copies, and HCCL durations. Compute/communication overlap is the intersection of merged device intervals in the same clock domain. Missing intervals remain unavailable. The report identifies the rank with the largest exposed communication duration when both types of events exist. Host-only exports are marked `host-only`. The coordinator requires Python 3.11–3.13. For raw ranks requiring offline analysis, `profiling.analysisPython` may select an interpreter with matching torch_npu.
+
+With a local loopback service endpoint, setting `profiling.devices: [1]` also records CPU busy percentage, available host memory, interface byte counters, and utilization and HBM occupancy for the selected physical NPU during diagnostics. Network counters are scoped to the sampler's network namespace. For a containerized service, `profiling.samplerPython` may point to a Python launcher inside its container. Forward stdin and mount both the AgentX scripts and result directories at identical paths.
+
+Use `profiling.nodeMetrics` to sample an exporter on the serving node. For example, set `endpoint: http://inference-node:9100/metrics` and `names: [node_cpu_seconds_total, node_memory_MemAvailable_bytes, node_network_receive_bytes_total]`. Select the actual names from a device exporter for NPU memory and utilization. The evidence retains labels, source URL and timestamps.
+
+Each run writes `report.md` and `metrics.json` for offline use. Per-attempt formal output is in `artifacts/agentx/outputs/point-<concurrency>/`; diagnostic exports and raw PMU tables are under `artifacts/agentx/profiling/point-<concurrency>/trace/`. The shared mount keeps original service traces. Use `profiling.service` for a dedicated diagnostic instance serving the same model.
 
 [User guide](../README.md) · [Quick start](../quick-start.md)

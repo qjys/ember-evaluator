@@ -247,25 +247,46 @@ SSH 认证属于部署操作，不写入实验 YAML。模型必须支持所选 T
 
 适配会把上游累计采集错误数写入原始导出的 `evaluator_collection_error_count`，并在摘要的可选 `telemetry.collectionErrors` 中保存。该计数是全部端点合计，只在报告中展示一次，不分配给每个来源，也不据此自动把所有来源改成 `partial`。历史摘要缺少该字段时显示“未记录”，不假定错误数为零。
 
-## 一次运行采集正式性能与服务端 profiling
+## 用一份 YAML 切换性能测量和服务端诊断
 
-先启动支持流式 Chat Completions、Prometheus `/metrics` 及 SGLang `/start_profile`、`/stop_profile` 的 Ascend 推理服务，并启用 NPU profiler 自动导出。服务进程和 evaluator 协调端须以相同绝对路径读写 `profiling.traceDirectory`。使用管理容器时也要挂载该目录。协调端需有 Python 3.11–3.13 解析导出文件。按快速上手设置模型地址、密钥和匹配的 tokenizer，运行一次：
+在 [AgentX 优化模板](../../../playbook/agentx/agentx-service-profiling.yaml) 中设置 `benchmark.config.measurementMode`。配置好服务、tokenizer 和共享目录后，每次切换模式只需改这一项。
+
+| 模式 | 每个并发档执行的工作 | 报告内容 |
+| --- | --- | --- |
+| `performance` | 关闭采集的服务上运行正式负载 | 请求吞吐、token 吞吐、TTFT、TPOT、ITL、请求时延，以及 KV Cache 和队列 |
+| `profiling` | 一棵树预热，再采集一次有界回放 | 所选诊断类型的证据及原始文件位置 |
+| `all` | 先跑完所有正式档，再依次跑相同并发的诊断档 | 一份报告按并发对齐两轮结果，诊断失败时仍保留正式成绩 |
 
 ```bash
 arsi-evaluator run playbook/agentx/agentx-service-profiling.yaml
 ```
 
-示例按以下顺序发送真实推理请求：
+示例按并发 1、8 各回放相同的前 8 棵会话树。诊断默认每档回放与并发数相同的树数；将 `profiling.traceCount` 设为 8 可使两个诊断档都使用前 8 棵。并发单位是会话树，一棵树可以发送多次请求。`scenario: standard` 保留 Harness 的预热和正式窗口，诊断始终使用有界回放。请求级 TPOT 为一次成功请求的（总时延 − 首 token 时延）除以（输出 token 数 − 1），仅纳入至少两个输出 token 的请求。
 
-| 阶段 | 并发 1 | 并发 8 | 报告 |
-| --- | --- | --- | --- |
-| 正式压测 | 完整回放前 8 棵会话树 | 完整回放相同的 8 棵树 | 各档吞吐、TTFT、ITL、请求时延及配置的引擎指标 |
-| 服务端诊断 | 开启 profiler，完整回放 1 棵树，停止并导出 | 开启 profiler，完整回放 8 棵树，停止并导出 | 按并发、rank 列出设备算子和 kernel 数据 |
+正式轮从服务的 `/metrics` 每秒采样，并保留正式时间窗口内的原始 JSONL。默认读取 vLLM 的 KV Cache 使用率、运行和等待请求数。用 `engineMetrics` 可指定其他 Prometheus 名称。Gauge 显示每组标签的均值、峰值和样本数，Counter 显示增量；重置或缺失会标为 `partial`。未配置 `measurementMode` 的旧实验沿用原有轮次及采样方式。
 
-会话树包含多个请求及子 Agent；`traceCount` 数的是树。`profiling.traceCount: 8` 可让两个诊断档都回放前 8 棵。正式轮也支持 `scenario: standard`，保留原生预热和计时窗口，诊断轮仍使用有界回放。同一服务贯穿两轮，也可以用 `profiling.service` 指向 `services` 中同模型的诊断实例。正式轮的所有并发档成功后才开启 profiling；诊断轮请求及 profiler 开销不计入正式成绩。
+| `profiling.preset` | 服务准备及采集内容 |
+| --- | --- |
+| `timeline`（默认） | 为 vLLM Ascend 启用 torch profiler，并将服务启动参数 `--profiler-config` 中的 `torch_profiler_dir` 和 YAML 的 `traceDirectory` 指向同一共享目录。协调端通过 `/start_profile` 和 `/stop_profile` 控制服务，只读取本轮新增的 rank。SGLang 用户设 `provider: sglang`，服务会收到本档的独立输出目录。 |
+| `compute` | 在服务主机使用本机回环地址和已配置 CANN 的 `msprof`、`npu-smi`，指定 `devices: [1]` 等物理卡号。按 PipeUtilization 采集 Cube、Vector、MTE 等已导出字段。 |
+| `bandwidth` / `cache` | 使用相同的本机设置。分别采集片上内存读写带宽或 L2Cache 命中指标，实际字段取决于硬件和 CANN 导出。每次诊断只选一种。若 CANN 只导出命中及缺失后重分配次数，报告保留原始计数，并列出“命中 /（命中 + 缺失后重分配）”的口径。 |
 
-`engineMetrics` 接受服务实际暴露的 Prometheus 样本名。回放模式在负载前后各读取一次，标准模式使用原生正式窗口内的首末采样。保留每组标签的读数，对单调计数器给出增量，缺失或重置标为 `partial`。只配置 `engineMetrics` 时只跑正式轮。旧配置 `solver.config.telemetry.msprof` 请改用示例中的 `benchmark.config.profiling`；旧报告仍可离线重建。新采集来自服务导出，原有 `mac_fp16_ratio` 等命令行硬件计数器没有直接对应值。
+专项计数器覆盖 profiler 开启到停止的整个窗口，包含回放客户端的准备和收尾。报告分开列出 AI Core 与 Vector Core，并保留 HBM 板级均值及各通道行。导出行数反映 CANN 表中参与汇总的行数。
 
-一次运行生成一份 `report.md` 和 `metrics.json`。报告列出每档结果的相对路径。正式 attempt 的 `artifacts/agentx/outputs/point-<并发>/` 保存 Harness 原始输出；诊断 attempt 的 `artifacts/agentx/profiling/point-<并发>/` 下，`outputs/` 保存诊断回放，`trace/` 保存各 rank 已解析的导出文件。每个已采集的 attempt 另有 `artifacts/agentx/collections.json`。完整原始 trace 留在共享目录。只有主机事件时标为 `host-only`，控制请求或导出失败时显示诊断失败，已完成的正式数据仍可查看。
+时间线报告列出每个 rank 的热点算子、输入 Shape、Runtime 调用和 Memcpy，以及 HCCL 的执行时间和与计算重叠的时间。重叠按同一设备时钟上的区间求交；缺少相应事件时显示为缺失。多 rank 时报告标出未被计算覆盖的通信时间最长的 rank。能导出 Shape 的服务端 profiler 和 CANN 版本才能提供 Shape。只有主机事件时状态为 `host-only`。协调端需要 Python 3.11–3.13，原始 rank 需要离线解析时可用 `profiling.analysisPython` 指向安装了匹配 torch_npu 的解释器。
+
+在同机使用回环地址时，设置 `profiling.devices: [1]` 也会在诊断期间读取服务主机的 CPU 忙碌率、可用内存、各网口收发字节，以及所选物理 NPU 的利用率和 HBM 占用。记录保留采集所在主机或容器可见的网络接口。服务在容器里时可用 `profiling.samplerPython` 指定在该容器中执行 Python 的程序，该程序需转发标准输入，且能以相同路径访问 evaluator 的 AgentX 脚本和结果目录。
+
+诊断轮还可指定服务节点的 Prometheus exporter。以下名称适用于 node_exporter；NPU 显存、利用率等需按设备 exporter 实际暴露的名称配置。同名序列按标签分开，保留 endpoint 及时间戳。
+
+```yaml
+    profiling:
+      traceDirectory: /data/shared/agentx-traces
+      nodeMetrics:
+        endpoint: http://inference-node:9100/metrics
+        names: [node_cpu_seconds_total, node_memory_MemAvailable_bytes, node_network_receive_bytes_total]
+```
+
+`report.md` 和 `metrics.json` 可离线重建。每档正式产物位于对应 attempt 的 `artifacts/agentx/outputs/point-<并发>/`，诊断产物位于 `artifacts/agentx/profiling/point-<并发>/`。从 `trace/` 可查各 rank 导出或 msprof 的原始列名和单位，共享目录保留服务原始 trace。可用 `profiling.service` 选择独立的同模型诊断实例，使服务级 profiler 专用于本次实验。
 
 [返回用户手册](../README.zh-CN.md) · [快速上手](../quick-start.zh-CN.md)
