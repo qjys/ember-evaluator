@@ -1,20 +1,22 @@
-import { writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { join, posix } from "node:path";
 import { expectNonEmptyString, expectPositiveNumber, expectRecord, rejectUnknown } from "../../core/validation/input.js";
 import type { EnvironmentSession, RuntimeInstallation, RuntimeRequirement } from "../../core/contracts/environment.js";
 import type { SolveResult } from "../../core/contracts/result.js";
 import type { AttemptContext, PreparedSolver, Solver, SolverProvenance } from "../../core/contracts/solver.js";
 import type { PublicTask } from "../../core/contracts/task.js";
-import { bindSolverService, type ServiceBinding, type PluginFactoryContext } from "../../core/contracts/plugin.js";
+import { bindService, bindSolverService, type ServiceBinding, type PluginFactoryContext } from "../../core/contracts/plugin.js";
+import { captureAgentXProfile } from "../../runtimes/agentx/service-profile.js";
+import { collectionEvidence } from "../benchmarks/inference-engine/agentx/evidence/service-collections.js";
+import { dockerHostModelEndpoint } from "../../infrastructure/network/model-gateway.js";
 import { redactDiagnostic } from "../../core/errors/diagnostics.js";
 import { StringDecoder } from "node:string_decoder";
 import { AGENTX_VERSION } from "../../runtimes/agentx/versions.js";
-import { agentXUsage, normalizeAgentXExport, parseWorkload } from "../benchmarks/inference-engine/agentx/evidence/summary.js";
+import { agentXUsage, successfulAgentXWindow, normalizeAgentXExport, parseWorkload, type AgentXSummary } from "../benchmarks/inference-engine/agentx/evidence/summary.js";
 import { normalizeTelemetry, parseTelemetryConfig, type AgentXTelemetryConfig } from "../benchmarks/inference-engine/agentx/evidence/telemetry.js";
 import { agentXBridgeDigest, agentXLocalInstallation, lockAgentXLexicon, resolveAgentXPython, type AgentXLexicon } from "../../runtimes/agentx/runtime.js";
 import { startHostTelemetry, type HostNpuSampling } from "../../runtimes/agentx/host-telemetry.js";
 import { parseNetworkLatencyConfig, type AgentXNetworkLatencyConfig } from "../benchmarks/inference-engine/agentx/evidence/network-latency.js";
-import { resolveMsprofSettings, startMsprofCollection, type MsprofCollection } from "../benchmarks/inference-engine/agentx/evidence/msprof-telemetry.js";
 
 export type AgentXReplayConfig = {
   tokenizer?: string;
@@ -39,12 +41,6 @@ export function parseAgentXReplayConfig(value: unknown): AgentXReplayConfig {
     ...(v.tokenizerRevision === undefined ? {} : { tokenizerRevision: expectNonEmptyString(v.tokenizerRevision, "agentx-replay.tokenizerRevision") }),
     ...(v.pythonExecutable === undefined ? {} : { pythonExecutable: expectNonEmptyString(v.pythonExecutable, "agentx-replay.pythonExecutable") }),
     ...(v.requestTimeoutSeconds === undefined ? {} : { requestTimeoutSeconds: expectPositiveNumber(v.requestTimeoutSeconds, "agentx-replay.requestTimeoutSeconds") }) };
-}
-
-/** The Python bridge only samples vLLM/Ascend sources; msprof collection runs Node-side. */
-function bridgeTelemetry(config: AgentXTelemetryConfig): Omit<AgentXTelemetryConfig, "msprof"> {
-  const { msprof: _msprof, ...rest } = config;
-  return rest;
 }
 
 export function agentXEndpoint(endpoint: string): { url: string; endpoint: string } {
@@ -114,46 +110,75 @@ export class AgentXReplaySolver implements Solver {
   private async execute(input: PublicTask, session: EnvironmentSession, python: string, runner: string,
     lexicon: AgentXLexicon, context: AttemptContext): Promise<SolveResult> {
     const workload = parseWorkload(input.payload);
-    const ascend = this.config.telemetry?.ascend;
+    const collection = workload.collection;
+    const profile = collection?.type === "profiling" ? collection.profiling : undefined;
+    const binding = profile?.service ? bindService(this.runtime, profile.service) : this.binding;
+    const ascend = profile ? undefined : this.config.telemetry?.ascend;
+    const root = join(context.paths.artifacts, "agentx");
+    const point = "point-" + workload.concurrency;
+    const output = profile ? posix.join("profiling", point, "outputs") : posix.join("outputs", point);
     let sampling: HostNpuSampling | undefined;
     if (ascend && "mode" in ascend) {
       context.activity?.({ message: "Starting read-only NPU sampling on the host", activity: true });
       sampling = await startHostTelemetry(ascend.devices, join(context.paths.agent, "host-telemetry"), context.signal,
         this.runtime.environmentName === "local" ? python : undefined);
     }
-    const msprofConfig = this.config.telemetry?.msprof;
-    let msprofCollection: MsprofCollection | undefined;
-    if (msprofConfig) {
-      context.activity?.({ message: "Starting msprof service profiling on the host", activity: true });
-      const periodSec = workload.durationSeconds;
-      const metricsUrl = this.config.telemetry?.vllm?.endpoint ??
-        (session.modelEndpoint?.baseUrl ? agentXEndpoint(session.modelEndpoint.baseUrl).url + "/metrics" : undefined);
-      msprofCollection = startMsprofCollection(resolveMsprofSettings(msprofConfig, metricsUrl), context.paths.agent, periodSec,
-        context.signal, this.runtime.environmentName === "local" ? python : undefined);
-    }
-    const telemetryBridge = this.config.telemetry === undefined ? undefined : bridgeTelemetry(this.config.telemetry);
-    try { return await this.executeMeasurement(input, session, python, runner, lexicon, context, sampling, msprofCollection, telemetryBridge); }
-    finally {
-      if (msprofCollection) await msprofCollection.stop();
+    const measure = () => this.executeMeasurement(input, session, python, runner, lexicon, context, binding, sampling);
+    try {
+      let summary: AgentXSummary;
+      if (profile) {
+        const captured = await captureAgentXProfile({
+          endpoint: expectNonEmptyString(binding.model.endpoint, "AgentX profiling service"), key: binding.auth.value,
+          directory: profile.traceDirectory, destination: join(root, "profiling", point, "trace"),
+          exportTimeoutSeconds: profile.exportTimeoutSeconds, signal: context.signal,
+          ...(this.config.pythonExecutable ? { pythonExecutable: this.config.pythonExecutable } : {}),
+        }, measure);
+        summary = captured.measurement;
+        summary.deviceProfile = collectionEvidence(captured.profile, "profiling");
+      } else {
+        summary = await measure();
+      }
+      if (collection) {
+        await session.download("agentx-artifacts", join(root, output), context.signal);
+        await writeFile(join(root, "collections.json"), JSON.stringify({ points: [{ concurrency: workload.concurrency, dataset: workload.dataset,
+          ...(profile ? { profiling: summary.deviceProfile } : { performanceDirectory: output, performanceStatus:
+            successfulAgentXWindow(summary) ? "measured" : "partial",
+            ...(summary.engine ? { engine: summary.engine } : {}) }) }] }, null, 2) + "\n");
+      }
+      await writeFile(join(context.paths.agent, "agentx-summary.json"), JSON.stringify(summary, null, 2) + "\n", "utf8");
+      return { finalText: `AgentX completed at ${workload.concurrency} concurrent session trees`, usage: profile ?
+        { inputTokens: null, outputTokens: null, totalTokens: null } : agentXUsage(summary), observations: summary };
+    } catch (error) {
+      if (profile) {
+        await mkdir(root, { recursive: true });
+        await writeFile(join(root, "collections.json"), JSON.stringify({ points: [{ dataset: workload.dataset, concurrency: workload.concurrency,
+          profiling: { status: "failed", error: redactDiagnostic(error instanceof Error ? error.message : "AgentX profiling failed", [binding.auth.value]) } }] }) + "\n");
+      }
+      throw error;
+    } finally {
       if (sampling) await writeFile(join(context.paths.agent, "host-telemetry.json"),
         JSON.stringify({ localAscend: await sampling.finish() }, null, 2) + "\n", "utf8");
     }
   }
 
   private async executeMeasurement(input: PublicTask, session: EnvironmentSession, python: string, runner: string,
-    lexicon: AgentXLexicon, context: AttemptContext, sampling?: HostNpuSampling,
-    msprofCollection?: MsprofCollection,
-    telemetryBridge?: Omit<AgentXTelemetryConfig, "msprof">): Promise<SolveResult> {
+    lexicon: AgentXLexicon, context: AttemptContext, binding: ServiceBinding, sampling?: HostNpuSampling) {
     const workload = parseWorkload(input.payload);
-    const base = session.modelEndpoint?.baseUrl ?? this.binding.model.endpoint;
+    const diagnostic = workload.collection?.type === "profiling";
+    const configured = binding.model.endpoint;
+    const base = configured === this.binding.model.endpoint ? session.modelEndpoint?.baseUrl ?? configured :
+      configured && this.runtime.environmentName === "docker" && session.modelEndpoint ? dockerHostModelEndpoint(configured) : configured;
     if (base === null) throw new TypeError("Missing AgentX endpoint");
     const endpoint = agentXEndpoint(base);
     const tokenizerPath = this.runtime.environmentName === "local" ? join(session.workdir, "agentx-tokenizer") : posix.join(session.workdir, "agentx-tokenizer");
     const request = { schemaVersion: 1, key: context.key, workload, ...endpoint,
+      ...(workload.collection?.type === "performance" && workload.collection.engineMetrics ? { engineMetrics: {
+        names: workload.collection.engineMetrics, apiKey: binding.auth.value,
+        endpoint: endpoint.url + endpoint.endpoint.replace(/(?:\/v1)?\/chat\/completions$/u, "") } } : {}),
       ...(this.config.networkLatency === undefined ? {} : { networkLatency: this.config.networkLatency }),
-      ...(telemetryBridge && (telemetryBridge.vllm || telemetryBridge.ascend) ? { telemetry: telemetryBridge } : {}),
+      ...(diagnostic || this.config.telemetry === undefined ? {} : { telemetry: this.config.telemetry }),
       ...(sampling ? { hostAscend: sampling.targets } : {}),
-      model: this.binding.model.name, auth: this.binding.auth, tokenizerPath, trustRemoteCode: this.config.trustRemoteCode,
+      model: binding.model.name, auth: binding.auth, tokenizerPath, trustRemoteCode: this.config.trustRemoteCode,
       ...(this.binding.model.reasoningEffort === undefined ? {} : { reasoningEffort: this.binding.model.reasoningEffort }),
       artifactDir: this.runtime.environmentName === "local" ? join(session.workdir, "agentx-artifacts") : posix.join(session.workdir, "agentx-artifacts"),
       outputDir: session.agentOutputDir, ...(this.config.requestTimeoutSeconds === undefined ? {} : { requestTimeoutSeconds: this.config.requestTimeoutSeconds }) };
@@ -183,7 +208,7 @@ export class AgentXReplaySolver implements Solver {
         return terminal;
       };
       const [stdout, stderr, exit] = await Promise.all([observedOutput(), collect(handle.stderr, 1024 * 1024), handle.done]);
-      await writeFile(join(context.paths.agent, "bridge-stderr.log"), redactDiagnostic(stderr, [this.binding.auth.value]), "utf8");
+      await writeFile(join(context.paths.agent, "bridge-stderr.log"), redactDiagnostic(stderr, [binding.auth.value]), "utf8");
       context.signal.throwIfAborted();
       if (exit.code !== 0 || exit.signal !== null) throw new Error("AgentX Harness failed; see collected Harness artifacts and bridge-stderr.log");
       const lines = stdout.trim().split(/\r?\n/u);
@@ -194,21 +219,11 @@ export class AgentXReplaySolver implements Solver {
         this.config.networkLatency === undefined ? undefined : { config: this.config.networkLatency, probes: terminal.networkLatencyProbes });
       let telemetry = terminal.telemetry;
       if (sampling) telemetry = { ...expectRecord(telemetry, "host telemetry evidence"), localAscend: await sampling.finish() };
-      if (telemetryBridge && (telemetryBridge.vllm || telemetryBridge.ascend)) summary.telemetry = normalizeTelemetry(telemetryBridge, this.binding.model.name, telemetry);
-      if (msprofCollection) {
-        await msprofCollection.stop();
-        const msprofResult = await msprofCollection.result;
-        if (msprofResult.status === "completed" && msprofResult.summary) (summary as Record<string, unknown>).msprof = msprofResult.summary;
-        const requestedDevices = msprofResult.summary?.requestedDevices ?? msprofCollection.requestedDevices;
-        (summary as Record<string, unknown>).msprofAttempt = {
-          requestedDevices,
-          status: msprofResult.status,
-          ...(msprofResult.status === "error" && msprofResult.code ? { code: msprofResult.code } : {}),
-        };
-        await writeFile(join(context.paths.agent, "msprof-telemetry.json"), JSON.stringify(msprofResult, null, 2) + "\n", "utf8");
-      }
-      await writeFile(join(context.paths.agent, "agentx-summary.json"), JSON.stringify(summary, null, 2) + "\n", "utf8");
-      return { finalText: `AgentX completed at ${workload.concurrency} concurrent session trees`, usage: agentXUsage(summary), observations: summary };
+      if (this.config.telemetry && !diagnostic) summary.telemetry = normalizeTelemetry(this.config.telemetry, binding.model.name, telemetry);
+      if (diagnostic && !successfulAgentXWindow(summary)) throw new Error("AgentX diagnostic replay has missing or failed requests");
+      if (workload.collection?.type === "performance" && workload.collection.engineMetrics)
+        summary.engine = collectionEvidence(terminal.engine, "engine");
+      return summary;
     } catch (error) {
       await handle.stop(500);
       throw error;

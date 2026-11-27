@@ -1,5 +1,6 @@
 """Launch the pinned AgentX CLI with locked input and bounded replay controls."""
 import datetime
+from contextlib import nullcontext
 import importlib.metadata
 import json
 import os
@@ -38,11 +39,15 @@ def run():
     if importlib.metadata.version("agentx-harness") != "1.0.7":
         raise ValueError("AgentX Harness version differs from 1.0.7")
     from local_telemetry import LocalTelemetry
-    with LocalTelemetry(request.get("telemetry", {}), Path(request["artifactDir"]), request.get("hostAscend")) as telemetry:
-        run_measurement(request, telemetry)
+    from engine_metrics import standard_metrics_source
+    engine = request.get("engineMetrics")
+    source = standard_metrics_source(engine) if engine and request["workload"]["mode"] == "standard" else nullcontext()
+    with source as metrics_source, LocalTelemetry(request.get("telemetry", {}), Path(request["artifactDir"]), request.get("hostAscend")) as telemetry:
+        metrics_url, counters = metrics_source or (None, set())
+        run_measurement(request, telemetry, metrics_url, counters)
 
 
-def run_measurement(request, telemetry):
+def run_measurement(request, telemetry, metrics_url, counters):
     workload = request["workload"]
     expected = None
     if workload["mode"] == "replay":
@@ -79,8 +84,11 @@ def run_measurement(request, telemetry):
             "--concurrency", str(workload["concurrency"]), "--public-dataset", workload["loader"],
             "--benchmark-duration", str(workload["durationSeconds"]), "--random-seed", str(workload["seed"]),
             "--output-artifact-dir", str(artifacts), "--ui", "none", "--no-gpu-telemetry"]
-    if telemetry.sources:
-        args += ["--server-metrics", *dict.fromkeys(source["endpoint"] for source in telemetry.sources.values()),
+    endpoints = [source["endpoint"] for source in telemetry.sources.values()]
+    if metrics_url:
+        endpoints.append(metrics_url)
+    if endpoints:
+        args += ["--server-metrics", *dict.fromkeys(endpoints),
                  "--server-metrics-formats", "json", "jsonl"]
     else:
         args.append("--no-server-metrics")
@@ -120,7 +128,7 @@ def run_measurement(request, telemetry):
         )
     if expected is not None:
         environment["EVALUATOR_AGENTX_FULL_REPLAY"] = "1"
-    if telemetry.sources:
+    if endpoints:
         environment["EVALUATOR_AGENTX_TELEMETRY"] = "1"
     child = None
 
@@ -132,6 +140,9 @@ def run_measurement(request, telemetry):
     signal.signal(signal.SIGTERM, cancel)
     status = "error"
     try:
+        from engine_metrics import engine_result, read_metrics, standard_engine_result
+        engine = request.get("engineMetrics")
+        before = read_metrics(engine, engine["names"]) if engine and not metrics_url else None
         child = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                  text=True, encoding="utf-8", errors="replace", env=environment)
         event("harness", {"pid": child.pid})
@@ -148,6 +159,7 @@ def run_measurement(request, telemetry):
                     sys.stdout.write(json.dumps({"schemaVersion": 1, "type": "activity", "message": "AgentX: harness output received"}) + "\n")
                     sys.stdout.flush()
         code = child.wait()
+        after = read_metrics(engine, engine["names"]) if before else None
         telemetry.finish()
         # The official exporter redacts keys and headers. Also sanitize exact
         # runtime secrets in textual evidence, including error-path exports.
@@ -179,7 +191,28 @@ def run_measurement(request, telemetry):
         raw = json.loads(exports[0].read_text(encoding="utf-8"))
         if raw.get("was_cancelled") is not False:
             raise RuntimeError("AgentX profiling was cancelled")
+        # Some Harness exports omit the zero error counter. Confirm it against the
+        # per-request formal phase before using it to unlock a dependent diagnostic.
+        if workload.get("collection") and workload["mode"] == "standard" and raw.get("error_request_count") is None:
+            successes = failures = 0
+            for path in artifacts.rglob("profile_export.jsonl"):
+                with path.open(encoding="utf-8") as source:
+                    for line in source:
+                        if not line.strip():
+                            continue
+                        record = json.loads(line)
+                        meta = record["metadata"]
+                        if meta.get("benchmark_phase") == "profiling":
+                            if record.get("error") or meta.get("context_overflow_skip") or meta.get("was_cancelled"):
+                                failures += 1
+                            else:
+                                successes += 1
+            if successes and successes == raw.get("request_count", {}).get("avg"):
+                raw["error_request_count"] = {"unit": "requests", "avg": failures}
         terminal = {"schemaVersion": 1, "type": "result", "export": raw}
+        if engine:
+            terminal["engine"] = (standard_engine_result(artifacts, metrics_url, engine["names"], counters) if metrics_url else
+                                  engine_result(engine["names"], before, after))
         if network is not None and network["mode"] == "automatic":
             # Keep official RTT and adjusted metrics untouched. Only count the
             # raw probe records so unavailable/failed probing remains visible.

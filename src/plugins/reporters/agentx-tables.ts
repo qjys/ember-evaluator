@@ -12,14 +12,14 @@ export function renderAgentXTables(value: JsonValue | undefined): string[] {
   if (metric.applicable !== true) return [];
   if (!Array.isArray(metric.points)) throw new TypeError("Invalid AgentX report points");
   const lines = ["## AgentX serving performance", "",
-    "会话并发是同时活动的会话树数，实际请求并发可能更高。下表仅使用 profiling 统计；预热单列。分位数分别属于各测量点。", "",
+    "会话并发是同时活动的会话树数，实际请求并发可能更高。下表取自正式压测的测量窗口，预热单列。分位数分别属于各测量点。", "",
     "| 测量点 | 状态 | 会话并发 | 场景 / 语料 | 上游有效 | 可比正式结果 | 成功请求 / 错误请求 | 测量秒数 |",
     "| --- | --- | --- | --- | --- | --- | --- | --- |"];
   const summaries = metric.points.map(value => {
     const point = expectRecord(value, "AgentX report point");
     const summary = point.measurement === null ? null : parseAgentXSummary(point.measurement);
     lines.push(`| ${escape(String(point.taskId))} | ${escape(String(point.status))} | ${summary?.workload.concurrency ?? "—"} | ${summary ? `${summary.workload.mode} / ${summary.workload.variant}` : "—"} | ${summary?.upstreamSubmissionValid ?? "—"} | ${summary?.comparable ?? "—"} | ${number(summary?.profiling.requests?.mean)} / ${number(summary?.profiling.errors?.mean)} | ${number(summary?.profiling.duration?.mean)} |`);
-    return { taskId: String(point.taskId), summary };
+    return { taskId: String(point.taskId), summary, collections: point.collections };
   });
   lines.push("", metric.points.length > 1 ? "### 并发点性能对比" : "### 测量点性能", "",
     "| 测量点 | 会话并发 | 输出吞吐 (tokens/sec) | 总 token 吞吐 (tokens/sec) | TTFT P50 / P95 (ms) | ITL P50 / P95 (ms) | 请求延迟 P95 (ms) |",
@@ -33,8 +33,43 @@ export function renderAgentXTables(value: JsonValue | undefined): string[] {
     interactivity: "Interactivity", fullResponseInteractivity: "Full-response Interactivity" };
   const row = (taskId: string, name: string, stat: AgentXStatistic | null | undefined) =>
     `| ${escape(taskId)} | ${name} | ${stat?.unit ?? "—"} | ${number(stat?.mean)} | ${number(stat?.p50)} | ${number(stat?.p95)} | ${number(stat?.p99)} | ${stat?.count ?? "—"} |`;
-  for (const { taskId, summary } of summaries) {
+  for (const { taskId, summary, collections } of summaries) {
     lines.push("", `### 测量点 ${escape(taskId)}`, "");
+    if (Array.isArray(collections)) for (const item of collections) {
+      const c = expectRecord(item, "AgentX collection");
+      lines.push("正式压测 · " + escape(String(c.performanceStatus)), "");
+      if (typeof c.performanceDirectory === "string") lines.push("正式产物 · " + escape(c.performanceDirectory), "");
+      if (c.engine) {
+        const engine = expectRecord(c.engine, "AgentX engine metrics");
+        lines.push("推理引擎指标 · " + escape(String(engine.status)), "",
+          "| 指标 | 压测前 | 压测后 | 计数器增量 |", "| --- | ---: | ---: | ---: |");
+        for (const raw of Array.isArray(engine.series) ? engine.series : []) {
+          const r = expectRecord(raw, "engine series");
+          lines.push("| " + [r.series, r.before, r.after, r.delta].map(v => escape(String(v ?? "—"))).join(" | ") + " |");
+        }
+        lines.push("");
+        if (Array.isArray(engine.missing) && engine.missing.length) lines.push("缺少指标 " + escape(engine.missing.join(", ")), "");
+        if (Array.isArray(engine.errors)) for (const error of engine.errors) lines.push(escape(String(error)), "");
+      }
+      if (c.profiling) {
+        const p = expectRecord(c.profiling, "AgentX profiling");
+        lines.push("Ascend profiling · " + escape(String(p.status)), "");
+        if (p.error) lines.push(escape(String(p.error)), "");
+        if (p.artifactDirectory) lines.push("诊断产物 · " + escape(String(p.artifactDirectory)), "");
+        if (p.traceDirectory) lines.push("服务端 trace · " + escape(String(p.traceDirectory)), "");
+        if (Array.isArray(p.exports)) {
+          lines.push(`诊断轮回放 ${p.traceCount} 棵会话树，完成 ${p.requests} 条请求。`, "",
+            "| Rank 导出 | 设备证据 | 算子 Device (µs) | 算子 Host (µs) | Kernel 数 | Kernel 执行 (µs) | Kernel 等待 (µs) |",
+            "| --- | --- | ---: | ---: | ---: | ---: | ---: |");
+          for (const raw of p.exports) {
+            const rank = expectRecord(raw, "Ascend export");
+            lines.push("| " + [rank.artifactDirectory, rank.deviceEvidence, rank.operatorDeviceUs, rank.operatorHostUs, rank.kernelCount,
+              rank.kernelDurationUs, rank.kernelWaitUs].map(v => escape(String(v ?? "—"))).join(" | ") + " |");
+          }
+          lines.push("");
+        }
+      }
+    }
     if (!summary) {
       lines.push("暂无有效测量摘要；状态见上方测量点表。推理服务与硬件指标采集状态未知。", "");
       continue;

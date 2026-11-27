@@ -198,3 +198,43 @@ test("concurrency points retain their own percentiles in metrics and reports", a
   expect(markdown).not.toContain("| agentx-performance |");
   expect(markdown).not.toContain('"measurement"');
 });
+
+test("service collections retain formal point order and require persisted successful baselines", async () => {
+  const config = parseAgentXConfig({ concurrency: [1, 8], engineMetrics: ["fixture_total"], profiling: { traceDirectory: "/shared/traces" } });
+  const benchmark = new AgentXBenchmark(config, "local");
+  const value = snapshot();
+  if (!value.run.source) throw new Error("Fixture source missing");
+  const refs = [];
+  for await (const ref of benchmark.enumerate(value.run.source, new AbortController().signal)) refs.push(ref);
+  expect(refs.map(r => r.id)).toEqual(["agentx-256k-standard-c1", "agentx-256k-standard-c8", "agentx-256k-standard-c1-profiling", "agentx-256k-standard-c8-profiling"]);
+  const [first, second, diag, next] = refs;
+  const record = value.records[0];
+  if (!first || !second || !diag || !next || !record?.solve) throw new Error("Invalid fixture");
+  record.key.taskId = first.id;
+  record.collection = { artifacts: "complete", trajectory: "complete" };
+  value.run.taskIds = refs.map(r => r.id);
+  await expect(benchmark.validatePrerequisites(diag, async () => value)).rejects.toThrow(/concurrency 8/u);
+  const other = structuredClone(record);
+  other.key.taskId = second.id;
+  value.records.push(other);
+  await expect(benchmark.validatePrerequisites(diag, async () => value)).resolves.toBeUndefined();
+  await expect(benchmark.validatePrerequisites(next, async () => value)).rejects.toThrow(/preceding diagnostic/u);
+  record.solve.observations = normalizeAgentXExport({ ...profileExport(), error_request_count: { unit: "requests", avg: 1 } }, workload, lexicon);
+  await expect(benchmark.validatePrerequisites(diag, async () => value)).rejects.toThrow(/failed requests/u);
+  const metrics = await new AgentXPerformanceMetrics().compute(value);
+  expect(metrics).toMatchObject({ points: [{ status: "partial", collections: [{ performanceStatus: "partial", profiling: { status: "pending" } }] },
+    { status: "partial", collections: [{ performanceStatus: "measured", profiling: { status: "pending" } }] }] });
+  expect(() => parseAgentXConfig({ concurrency: [1, 8], profiling: { traceDirectory: "/shared", traceCount: 4 } })).toThrow(/cover every concurrency/u);
+  expect(() => parseAgentXReplayConfig({ telemetry: { msprof: {} } })).toThrow(/benchmark.config.profiling/u);
+});
+
+test("legacy msprof summaries remain available to offline reports", async () => {
+  const value = snapshot();
+  const solve = value.records[0]?.solve;
+  if (!solve) throw new Error("Fixture has no solve result");
+  solve.observations = { ...normalizeAgentXExport(profileExport(), workload, lexicon), msprof: {
+    schemaVersion: 1, kind: "profiling-summary", aggregate: { device_count: 1, mac_fp16_ratio_mean: 0.5 },
+    devices: { "0": { mac_fp16_ratio: 0.5, mac_int8_ratio: null, samples: 10 } }, availability: {}, csv_parse_errors: [] } };
+  const metrics = await new AgentXPerformanceMetrics().compute(value);
+  expect(renderMarkdown(value, { "agentx-performance": metrics })).toContain("msprof 服务级 profiling");
+});

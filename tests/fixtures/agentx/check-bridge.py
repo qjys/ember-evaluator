@@ -17,7 +17,9 @@ from transformers import PreTrainedTokenizerFast
 
 root = Path(sys.argv[1]).resolve()
 runner = Path(sys.argv[2]).resolve()
-full_replay = "--full-replay" in sys.argv
+service_collections = "--service-collections" in sys.argv
+service_engine = "--service-engine" in sys.argv or service_collections
+full_replay = "--full-replay" in sys.argv or service_collections
 smoke_concurrency = "--smoke-concurrency" in sys.argv
 standard_duration = "--standard-duration" in sys.argv
 network_automatic = "--network-automatic" in sys.argv
@@ -54,7 +56,7 @@ input_dir.mkdir(exist_ok=True)
 traces = [trace]
 if full_replay:
     traces = []
-    for trace_index in range(4):
+    for trace_index in range(8 if service_collections else 4):
         item = json.loads(json.dumps(trace))
         item["id"] = "controlled-session-%d" % trace_index
         child = {"t": 0.025, "type": "subagent", "agent_id": "child", "subagent_type": "Explore",
@@ -75,6 +77,8 @@ calls = []
 diagnostics = []
 metric_calls = []
 metric_failed = False
+active_profile = None
+collection_events = []
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -85,7 +89,15 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         global metric_failed
-        if self.path in ("/metrics", "/npu/metrics"):
+        if service_engine and self.path == "/metrics":
+            if self.headers.get("Authorization") != "Bearer " + secret:
+                self.send_error(403)
+                return
+            collection_events.append(["metrics", len(calls)])
+            contents = ("# TYPE fixture_requests counter\nfixture_requests_total %d\n" % len(calls)).encode()
+        elif service_collections and self.path == "/events":
+            contents = json.dumps(collection_events).encode()
+        elif self.path in ("/metrics", "/npu/metrics"):
             metric_calls.append(self.path)
             if not telemetry_check:
                 self.send_error(404)
@@ -127,6 +139,25 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(contents)
 
     def do_POST(self):
+        global active_profile
+        if service_collections and self.path in ("/start_profile", "/stop_profile"):
+            if self.headers.get("Authorization") != "Bearer " + secret:
+                self.send_error(403)
+                return
+            body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            if self.path == "/start_profile":
+                assert active_profile is None and body["activities"] == ["CPU", "NPU"]
+                active_profile = Path(body["output_dir"])
+            else:
+                directory = active_profile / "rank0" / "ASCEND_PROFILER_OUTPUT"
+                directory.mkdir(parents=True)
+                (directory / "op_statistic.csv").write_text("OP Type,Core Type,Count,Total Time(us)\nMatMul,AI_CORE,3,75\n")
+                active_profile = None
+            collection_events.append([self.path, len(calls)])
+            self.send_response(200)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         for process in psutil.Process().children(recursive=True):
             try:
                 assert secret not in "\0".join(process.cmdline()), "Credential in Harness process arguments"
@@ -189,6 +220,9 @@ if smoke_concurrency:
 if telemetry_check:
     request["telemetry"] = {"vllm": {"endpoint": request["url"] + "/metrics"},
                             "ascend": {"endpoint": request["url"] + "/npu/metrics", "deviceId": 4, "chipId": 0}}
+if service_engine:
+    request["engineMetrics"] = {"endpoint": request["url"], "apiKey": secret, "names": ["fixture_requests_total"]}
+    request["workload"]["collection"] = {"type": "performance", "engineMetrics": ["fixture_requests_total"]}
 if "--serve" in sys.argv:
     print(json.dumps({"url": request["url"], "tokenizer": request["tokenizerPath"], "key": secret}), flush=True)
     thread.join()
@@ -209,6 +243,11 @@ try:
     assert raw["was_cancelled"] is False
     assert raw["metadata"]["scenario"] == "agentx"
     assert calls and raw["request_count"]["avg"] > 0
+    if service_engine:
+        metric = terminal["engine"]
+        assert metric["status"] == "measured", metric
+        series, = metric["series"]
+        assert series["series"] == "fixture_requests_total" and 0 < series["delta"] <= len(calls), series
     if network_automatic or network_manual:
         assert raw["network_rtt"]["avg"] > 0
         assert raw["network_adjusted_time_to_first_token"]["avg"] <= raw["time_to_first_token"]["avg"]

@@ -1,0 +1,27 @@
+# Use an already running SGLang Ascend service with metrics and profiler export enabled.
+hardware: npu
+services:
+  default:
+    model: ${MODEL_NAME}
+    base_url: ${MODEL_ENDPOINT}
+    api_key: ${MODEL_API_KEY}
+benchmark:
+  name: agentx
+  scenario: replay
+  config:
+    traceCount: 8
+    concurrency: [1, 8]
+    engineMetrics: ["sglang:prompt_tokens_total", "sglang:generation_tokens_total"]
+    profiling:
+      # Mount this directory at the same absolute path on the service and evaluator.
+      traceDirectory: /data/shared/agentx-traces
+      # Default: replay one complete tree per concurrency lane in each diagnostic.
+      # traceCount: 8
+      # service: diagnostic   # Optional entry in services serving the same model.
+      exportTimeoutSeconds: 1800
+  solver:
+    config:
+      tokenizer: ${AGENTX_TOKENIZER}
+environment: local
+output:
+  directory: ../../results/agentx-service-profiling

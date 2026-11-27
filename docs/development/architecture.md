@@ -66,6 +66,8 @@ CLI `run` 和 SDK `Evaluator.run()` 使用 [application/run.ts](../../src/applic
 
 Benchmark 准备公开输入和私有验证材料；Solver 只接收公开任务与执行环境；Benchmark.verify 或私有验证运行时使用验证材料评分；Store 保存结果和产物。`Benchmark.prepare()` 在环境创建前执行，现有接口不支持任意新增“环境就绪后”的生命周期阶段，具体限制见 [Benchmark 开发指南](benchmarks.md#未来记忆评测的接口边界)。
 
+可选的 `Benchmark.validatePrerequisites()` 在公开任务准备完成后、分配本次执行环境前读取 Store 快照。AgentX 用它确认正式测量已落盘，再允许依赖这些结果的诊断轮执行。
+
 离线报告通过 [application/report/](../../src/application/report) 单独加载 Metrics 和 Reporter 的注册入口，读取已保存结果并调用所选组件，不加载内置组件总入口，也不重新运行 Solver。第三方报告组件通过同一个 loadPluginModule 加载，并继续检查保存的插件版本。修改证据格式时需同时检查结果读取、续跑、Metrics 和 Reporter。
 
 ## 补测、Ray 与 Docker

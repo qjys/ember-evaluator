@@ -1,8 +1,7 @@
 import type { EnvironmentSession } from "./environment.js";
-import type { AttemptStepResult, Failure, SolveResult, VerifyResult } from "./result.js";
+import type { AttemptStepResult, EvaluationKind, Failure, ResultSnapshot, SolveResult, VerifyResult } from "./result.js";
 import type { JsonValue, PreparedTask, SourceLock, TaskRef } from "./task.js";
 import type { EffectiveConfig } from "./config.js";
-import type { EvaluationKind } from "./result.js";
 import type { ActivityListener } from "./activity.js";
 import type { VerificationRuntime } from "./verification-runtime.js";
 
@@ -24,6 +23,8 @@ export interface Benchmark {
   readonly evaluationKind?: EvaluationKind;
   /** Pure cross-component checks, also invoked for dry-run; no resource allocation. */
   validateRun?(config: EffectiveConfig): void;
+  /** Check ordered task prerequisites against persisted attempts immediately before execution. */
+  validatePrerequisites?(ref: TaskRef, snapshot: () => Promise<ResultSnapshot>): Promise<void>;
   /** Metadata only: no containers, image builds, or model calls. */
   planRun?(refs: TaskRef[], source: SourceLock, signal: AbortSignal, activity?: ActivityListener): Promise<BenchmarkRunPlan>;
   /** Validate a locked source even when a completed run has no tasks to restart. */

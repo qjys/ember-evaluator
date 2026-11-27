@@ -66,6 +66,8 @@ Public [bootstrap](../../src/application/plugins/bootstrap.ts) opens its own reg
 
 Benchmark prepares public input and private verification material. Solver receives only public tasks and an execution environment; Benchmark.verify or a private verification runtime scores the result; Store saves results and artifacts. `Benchmark.prepare()` runs before environment creation. Arbitrary additional lifecycle stages after environment startup require contract changes; see [Benchmark lifecycle limits](benchmarks.en.md#limits-for-future-memory-evaluation).
 
+The optional `Benchmark.validatePrerequisites()` hook can read a store snapshot after task preparation and before attempt environment allocation. AgentX uses it to require persisted formal measurements before starting dependent diagnostic runs.
+
 Offline reports use [application/report/](../../src/application/report) to load the Metrics and Reporter registration entries separately, read saved results, and invoke the selected components without loading the full built-in registration entry or running Solver again. Third-party reporting components use the same loadPluginModule function and retain checks against their saved plugin versions. Evidence format changes require checking readers, resume, Metrics, and Reporter together.
 
 ## Retry, Ray, and Docker

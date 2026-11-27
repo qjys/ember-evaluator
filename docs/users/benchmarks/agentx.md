@@ -143,7 +143,7 @@ Each concurrency point has a separate attempt saving:
 
 Profiling/warmup are separate. TTFT/ITL/request latency/Interactivity distributions come from official exports; throughput uses harness measurement time. Point percentiles are not merged. Missing values stay unknown; token usage sums only fields available for both warmup/profiling, not provider bills.
 
-For multiple points, root `report.md` lists status and report links. `[1, 4, 8]` creates `points/c1/report.md`, `points/c4/report.md`, `points/c8/report.md`, each with metrics.json. Each contains only its request/warmup/vLLM/device-chip metrics, duration, usage, and attempts, including failure/unrun status pages. A single point retains detailed root report.md.
+For multiple points without `engineMetrics` or `profiling`, root `report.md` lists status and report links. `[1, 4, 8]` creates `points/c1/report.md`, `points/c4/report.md`, `points/c8/report.md`, each with metrics.json. Each contains only its request/warmup/vLLM/device-chip metrics, duration, usage, and attempts, including failure/unrun status pages. A single point retains detailed root report.md.
 
 Root `metrics.json` keeps batch machine data/subreport indexes. Point metrics recalculate from their own records. Raw links point to original attempts without copying trajectories/artifacts. Points share run ID/source lock/resume state and execute sequentially.
 
@@ -215,33 +215,6 @@ Harness strips trailing slashes and appends `/metrics` when absent. Both sources
 
 vLLM uses `/metrics` for KV cache, running/waiting requests, preemptions, prefix queries/hits, and input/output tokens, matched explicitly by version. Counters show window deltas/rates rather than lifetime totals. Adjacent deltas accumulate in sample order, retaining restart resets. Model labels/endpoints/profiling/warmup are separate; the first in-window sample uses the previous sample as baseline.
 
-### msprof Service-Level Profiling (Opt-In)
-
-`telemetry.msprof` adds sample-based CANN duty-cycle collection alongside vLLM/Ascend telemetry. It requires `hardware: npu` and a host/toolbox with the `msprof` binary in PATH or a known CANN location; missing binaries mark the source failed without blocking request telemetry.
-
-```yaml
-telemetry:
-  vllm:
-    endpoint: http://127.0.0.1:18080/metrics
-  msprof:
-    devices:
-      - deviceId: 0
-      - deviceId: 1
-    freqHz: 10
-    metrics: ArithmeticUtilization
-    includeHbm: false
-```
-
-`freqHz` is an integer 1-100 (default 10); `metrics` selects the AICore metric set; `includeHbm` additionally samples HBM counters whose units are unverified and excluded from verdicts. Device IDs use the same `npu-smi` physical NPU IDs as Ascend telemetry; `msprof` receives the corresponding `Chip Logic ID` values, and the mapping is written to evidence.
-
-Device binding is required and accepts either the structured `devices` list or a compact `deviceIds` string: `deviceIds: "4,5,6,7"` samples physical cards 4, 5, 6, and 7, while `deviceIds: "all"` resolves every compute chip on the host via `npu-smi info -m` at collection time. Use "all" only on hosts where every device is authorized for sampling; otherwise pass the authorized list explicitly.
-
-Structured `devices` entries and a comma-separated `deviceIds` string are mutually exclusive alternatives with the same physical-card semantics; `deviceIds` exists so callers can drive device binding from environment substitution without embedding card identities in evaluator code. Binding correctness stays with the caller: the chosen devices must match the authorized window resources. Unresolved placeholders (for example an unset `"${MSPROF_DEVICES}"`) fail validation with the raw token in the error.
-
-When a metrics endpoint is configured or inferred and `waitForTraffic` is omitted, collection waits for sustained token traffic by default (up to a bounded wait; no traffic ends the attempt with `traffic_wait_timeout` instead of collecting idle devices). If the harness has already finished before traffic starts, the helper reports `harness_requested_before_collection` without collecting. Explicit `waitForTraffic: false` retains immediate collection. After the harness finishes, the helper is asked to close the collection window before evidence is exported; a harness-requested close exports the partial evidence already produced. The solver writes `msprof-telemetry.json` evidence plus `msprof/{window.json,summary.json,SHA256SUMS}`; completed summaries include requested physical IDs, resolved chip IDs, and their mapping, plus per-device `mac_fp16_ratio` and a `profiling-summary v1` contract with field-availability labels. Failures stay in the attempt record without blocking the benchmark.
-
-`mac_fp16_ratio` is the sample-based AICore FP16 MAC duty cycle (truth-caliber); it has no correspondence to `npu-smi` AICore%. `aic_mac_ratio_extra` from `MetricSummary.sqlite` stays source-specific-uncalibrated. Collection is mutually exclusive with `acl_task_time` and torch profiler in the same window; never run both.
-
 Raw upstream JSON/JSONL remains intact. Reports use ordered counters; rates divide by last in-window timestamp minus baseline, blank if nonpositive. Excluded boundary samples can make counter totals differ from request tokens; counts lost between scrapes cannot be restored. Request counts never substitute for device counters.
 
 Host samplers use existing Python 3/driver `npu-smi` without extra packages.
@@ -272,5 +245,21 @@ SSH authentication belongs to deployment, not YAML. Models need full trace conte
 New results use telemetry v2 with multiple devices/chips and empty endpoints after discovery failure. Historical v1 converts at read boundaries for offline processing, without rewriting originals. `local-telemetry.json` saves devices/chips/dynamic endpoints/errors. `complete` means required statistics exist, not every scrape succeeded; `partial` means missing data/metrics; `unavailable` means no usable statistics. Available-source diagnostics appear in optional warnings/reports. Monitoring status does not change `submission_valid` or request comparability.
 
 Adapters store cumulative upstream collection errors as `evaluator_collection_error_count` in raw exports and optional `telemetry.collectionErrors` in summaries. This endpoint-total count appears once, is not assigned per source, and does not automatically mark all sources partial. Historical absence means unrecorded, not zero.
+
+## Collecting performance and server profiles in one run
+
+Start an Ascend inference service that supports streaming Chat Completions, Prometheus `/metrics`, SGLang `/start_profile` and `/stop_profile`, and automatic NPU profile export. Mount `profiling.traceDirectory` read-write at the same absolute path on both the service and the evaluator coordinator, including its management container if used. The coordinator requires Python 3.11–3.13 to read exports. Set the service and tokenizer variables from the quick start, then run:
+
+```bash
+arsi-evaluator run playbook/agentx/agentx-service-profiling.yaml
+```
+
+The [service profiling example](../../../playbook/agentx/agentx-service-profiling.yaml) first replays the same eight complete session trees at concurrency 1 and 8. Both runs send real inference requests and supply the throughput, TTFT, ITL and request latency for the report. Only after both succeed does the evaluator enable the service profiler for a bounded replay at each concurrency, stop it and collect each rank’s export. The service stays running throughout. Diagnostic traffic and profiler overhead are excluded from the formal results.
+
+By default diagnostics replay one tree per concurrency lane. Set `profiling.traceCount: 8` to replay eight trees in both diagnostics. Each tree can contain multiple requests and subagents. With the standard scenario the formal run retains native warmup and timing, and diagnostics still use bounded replay. Optional `profiling.service` selects a second entry in `services` serving the same model.
+
+Set `engineMetrics` to actual Prometheus sample names. Replay takes snapshots before and after each formal load. Standard uses the first and last samples within the native measurement window. The report preserves label sets and gives deltas for counters; missing readings or counter resets yield a partial result. Specifying only `engineMetrics` runs only the formal phase. Replace retired `solver.config.telemetry.msprof` settings with `benchmark.config.profiling`. Historical reports remain readable. The service export provides operator and kernel timings; it does not reproduce the old `mac_fp16_ratio` hardware counter.
+
+Each run writes one `report.md` and `metrics.json`. Follow the point paths in the report to the matching attempt. Formal Harness output is in `artifacts/agentx/outputs/point-<concurrency>/`. Inside the diagnostic attempt’s `artifacts/agentx/profiling/point-<concurrency>/`, `outputs/` contains the replay and `trace/` contains selected per-rank export files. Each collected attempt writes `artifacts/agentx/collections.json`. The full raw trace stays on the shared mount. Exports with host activity alone are marked `host-only`. Failures to control the profiler or collect an export are reported separately from completed formal measurements.
 
 [User guide](../README.md) · [Quick start](../quick-start.md)

@@ -118,6 +118,9 @@ export class MarkdownReporter implements Reporter {
     if (metric.applicable !== true) return [];
     if (!Array.isArray(metric.points)) throw new TypeError("Invalid AgentX report points");
     const points = metric.points.map(value => expectRecord(value, "AgentX report point"));
+    // A collection joins results from multiple attempts. Render the full snapshot
+    // so a point's baseline and device evidence stay together in the same report.
+    if (points.some(point => Array.isArray(point.collections))) return [];
     return snapshot.run.taskIds.map(taskId => {
       const point = points.find(point => point.taskId === taskId);
       const summary = point?.measurement == null ? null : parseAgentXSummary(point.measurement);

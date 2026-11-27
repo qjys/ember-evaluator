@@ -3,10 +3,12 @@ import { localDatasetConfig } from "../../shared/local-data.js";
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { expectNonEmptyString, expectPositiveInteger, expectRecord, rejectUnknown } from "../../../../core/validation/input.js";
-import { type EffectiveConfig } from "../../../../core/contracts/config.js";
+import type { EffectiveConfig } from "../../../../core/contracts/config.js";
 import type { Benchmark, BenchmarkRunPlan } from "../../../../core/contracts/benchmark.js";
 import type { PreparedTask, SourceLock, TaskRef } from "../../../../core/contracts/task.js";
-import type { SolveResult, VerifyResult } from "../../../../core/contracts/result.js";
+import type { ResultSnapshot, SolveResult, VerifyResult } from "../../../../core/contracts/result.js";
+import { isEvaluationComplete } from "../../../../core/results/evaluation-outcome.js";
+import { parseEngineMetrics, parseProfileConfig, type AgentXProfileConfig } from "./evidence/service-collections.js";
 import { fingerprintConfig } from "../../../../core/results/run-manifest.js";
 import { DatasetCache } from "../../../../infrastructure/datasets/cache.js";
 import type { DatasetRecordSource } from "../../../../infrastructure/datasets/record-source.js";
@@ -14,10 +16,12 @@ import type { ActivityListener } from "../../../../core/contracts/activity.js";
 import { withDatasetActivity } from "../../../../infrastructure/datasets/activity.js";
 import { HuggingFaceFilesSource } from "../../../../infrastructure/datasets/sources/huggingface/files-source.js";
 import { agentXAssets, agentXBridgeDigest } from "../../../../runtimes/agentx/runtime.js";
-import { parseAgentXSummary, type AgentXMode, type AgentXVariant, type AgentXWorkload } from "./evidence/summary.js";
+import { parseAgentXSummary, successfulAgentXWindow, type AgentXMode, type AgentXVariant, type AgentXWorkload } from "./evidence/summary.js";
 import { parseTelemetryConfig } from "./evidence/telemetry.js";
 
 export type AgentXConfig = {
+  profiling?: AgentXProfileConfig;
+  engineMetrics?: string[];
   variant: AgentXVariant;
   mode: Exclude<AgentXMode, "smoke">;
   concurrency: number[];
@@ -31,7 +35,7 @@ export type AgentXConfig = {
 
 export function parseAgentXConfig(value: unknown): AgentXConfig {
   const v = expectRecord(value, "agentx");
-  rejectUnknown(v, ["variant", "mode", "concurrency", "durationSeconds", "seed", "traceCount", "cacheDir", "hfToken", "localPath"], "agentx");
+  rejectUnknown(v, ["variant", "mode", "concurrency", "durationSeconds", "seed", "traceCount", "cacheDir", "hfToken", "localPath", "engineMetrics", "profiling"], "agentx");
   if (v.variant !== undefined && v.variant !== "256k" && v.variant !== "full") throw new TypeError("agentx.variant must be 256k or full");
   if (v.mode !== undefined && !["standard", "replay"].includes(String(v.mode))) throw new TypeError("agentx.mode must be standard or replay");
   const mode = v.mode === "replay" ? "replay" : "standard";
@@ -46,7 +50,12 @@ export function parseAgentXConfig(value: unknown): AgentXConfig {
   const traceCount = mode === "replay" ? expectPositiveInteger(v.traceCount, "agentx.traceCount") : undefined;
   if (mode !== "replay" && v.traceCount !== undefined) throw new TypeError("agentx.traceCount requires mode=replay");
   if (traceCount !== undefined && concurrency.some(n => n > traceCount)) throw new TypeError("AgentX replay concurrency must not exceed traceCount");
+  const profiling = v.profiling === undefined ? undefined : parseProfileConfig(v.profiling);
+  const profileTrees = profiling?.traceCount;
+  if (profileTrees !== undefined && (concurrency.some(n => n > profileTrees) || (traceCount !== undefined && profileTrees > traceCount)))
+    throw new TypeError("profiling.traceCount must cover every concurrency and fit the replay selection");
   return { ...localDatasetConfig(v), variant: v.variant === "full" ? "full" : "256k", mode, concurrency, durationSeconds, seed: Number(seed),
+    ...(profiling ? { profiling } : {}), ...(v.engineMetrics === undefined ? {} : { engineMetrics: parseEngineMetrics(v.engineMetrics) }),
     ...(traceCount === undefined ? {} : { traceCount }),
     cacheDir: expectNonEmptyString(v.cacheDir ?? ".cache/agentx", "agentx.cacheDir"),
     ...(v.hfToken === undefined ? {} : { hfToken: expectNonEmptyString(v.hfToken, "agentx.hfToken") }) };
@@ -85,6 +94,14 @@ export class AgentXBenchmark implements Benchmark {
     if (!model || model.api !== "openai-completions" || model.endpoint === null)
       throw new TypeError("AgentX requires an OpenAI Chat Completions endpoint");
     if (model.maxTokens !== undefined) throw new TypeError("AgentX output lengths come from traces; remove services maxTokens");
+    if (this.config.profiling) {
+      if ((config.hardware ?? "npu") !== "npu") throw new TypeError("AgentX Ascend profiling requires hardware=npu");
+      if (config.run.sampling || config.run.taskIds || config.run.offset || config.run.maxTasks !== null)
+        throw new TypeError("Select ordered profiling points using benchmark.config.concurrency");
+      const profile = config.services[this.config.profiling.service ?? config.solver.service];
+      if (!profile?.endpoint || profile.api !== "openai-completions" || profile.name !== model.name || profile.maxTokens !== undefined)
+        throw new TypeError("AgentX profiling requires a Chat Completions service with the same model and trace-controlled output length");
+    }
   }
 
   async resolveSource(previous: SourceLock | null, signal: AbortSignal, activity?: ActivityListener): Promise<SourceLock> {
@@ -96,6 +113,28 @@ export class AgentXBenchmark implements Benchmark {
       signal.throwIfAborted();
       yield { id: this.id(concurrency), recordKey: { concurrency } };
     }
+    if (this.config.profiling) for (const concurrency of this.config.concurrency) {
+      signal.throwIfAborted();
+      yield { id: this.id(concurrency) + "-profiling", recordKey: { concurrency } };
+    }
+  }
+
+  async validatePrerequisites(ref: TaskRef, snapshot: () => Promise<ResultSnapshot>): Promise<void> {
+    if (!this.config.profiling || !ref.id.endsWith("-profiling")) return;
+    const { records } = await snapshot();
+    for (const concurrency of this.config.concurrency) {
+      const record = records.find(r => r.key.taskId === this.id(concurrency));
+      if (!record || !isEvaluationComplete(record) || record.collection.artifacts !== "complete" ||
+          record.collection.trajectory !== "complete") throw new Error(`Profiling skipped: incomplete performance at concurrency ${concurrency}`);
+      if (!successfulAgentXWindow(parseAgentXSummary(record.solve?.observations)))
+        throw new Error(`Profiling skipped: missing or failed requests at concurrency ${concurrency}`);
+    }
+    for (const concurrency of this.config.concurrency) {
+      const diagnosticId = this.id(concurrency) + "-profiling";
+      if (diagnosticId === ref.id) break;
+      const prior = records.find(r => r.key.taskId === diagnosticId);
+      if (!prior || !isEvaluationComplete(prior)) throw new Error(`Profiling skipped: preceding diagnostic incomplete at concurrency ${concurrency}`);
+    }
   }
 
   private id(concurrency: number): string { return `agentx-${this.config.variant}-${this.config.mode}-c${concurrency}`; }
@@ -103,7 +142,8 @@ export class AgentXBenchmark implements Benchmark {
   async prepare(ref: TaskRef, source: SourceLock, signal: AbortSignal): Promise<PreparedTask> {
     const key = expectRecord(ref.recordKey, "AgentX task key");
     const concurrency = expectPositiveInteger(key.concurrency, "AgentX task concurrency");
-    if (!this.config.concurrency.includes(concurrency) || ref.id !== this.id(concurrency)) throw new TypeError("Invalid AgentX point selection");
+    const diagnostic = !!this.config.profiling && ref.id === this.id(concurrency) + "-profiling";
+    if (!this.config.concurrency.includes(concurrency) || (!diagnostic && ref.id !== this.id(concurrency))) throw new TypeError("Invalid AgentX point selection");
     const file = source.files.find(file => file.path === "traces.jsonl");
     const metadata = expectRecord(source.metadata, "AgentX source metadata");
     if (!file || source.files.length !== 1 || metadata.dataset !== this.dataset || !/^(?:[a-f0-9]{40}|local:[a-f0-9]{64})$/u.test(source.revision))
@@ -116,7 +156,11 @@ export class AgentXBenchmark implements Benchmark {
       concurrency, durationSeconds: this.config.durationSeconds, seed: this.config.seed, dataset: this.dataset,
       loader: `semianalysis_cc_traces_weka_062126${this.config.variant === "256k" ? "_256k" : ""}`,
       revision: source.revision, sha256: file.sha256, tracePath: "input/traces.jsonl",
-      ...(this.config.traceCount === undefined ? {} : { traceCount: this.config.traceCount }) };
+      ...(this.config.traceCount === undefined ? {} : { traceCount: this.config.traceCount }),
+      ...(diagnostic && this.config.profiling ? { mode: "replay", traceCount: this.config.profiling.traceCount ?? concurrency,
+        collection: { type: "profiling", profiling: this.config.profiling } } :
+        this.config.profiling || this.config.engineMetrics ? { collection: { type: "performance",
+          ...(this.config.engineMetrics ? { engineMetrics: this.config.engineMetrics } : {}) } } : {}) };
     return { input: { id: ref.id, prompt: `AgentX ${this.config.variant} ${this.config.mode}: ${concurrency} concurrent session trees`, payload },
       verification: payload, solveEnv: { workdir: ".", image: null, initialFiles: [{ source: tracePath, target: payload.tracePath }],
         runtime: [], ...(this.environmentName === "docker" ? { network: "host", build: { context: agentXAssets,
@@ -143,6 +187,10 @@ export class AgentXBenchmark implements Benchmark {
     const summary = parseAgentXSummary(result.observations);
     if (fingerprintConfig(summary.workload) !== fingerprintConfig(task.verification))
       throw new TypeError("AgentX observations differ from the locked measurement point");
+    const collection = summary.workload.collection;
+    if ((collection?.type === "profiling" && !summary.deviceProfile) ||
+        (collection?.type === "performance" && collection.engineMetrics && !summary.engine))
+      throw new TypeError("Missing requested AgentX collection");
     return { passed: null, details: { measurement: "agentx", comparable: summary.comparable,
       upstreamSubmissionValid: summary.upstreamSubmissionValid, incomparableReasons: summary.incomparableReasons } };
   }

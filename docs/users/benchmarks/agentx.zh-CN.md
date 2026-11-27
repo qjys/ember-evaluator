@@ -34,6 +34,7 @@ AgentX 使用脱敏 trace 重建请求长度、前缀复用、会话轮次、子
 | 前 50 条 Trace 完整回放，可能耗时较长 | [agentx-replay.yaml](../../../playbook/agentx/agentx-replay.yaml) |
 | 两条 Trace，并采集 vLLM 与 NPU 4 指标 | [agentx-npu-replay.yaml](../../../playbook/agentx/agentx-npu-replay.yaml)，需先准备两个指标端点 |
 | local 标准测评，裸机自动采集指定 NPU | [agentx-npu-local.yaml](../../../playbook/agentx/agentx-npu-local.yaml)，管理容器或直接裸机运行均可，多卡逐项填写 |
+| 一次运行采集正式性能、引擎指标和 Ascend 算子 | [agentx-service-profiling.yaml](../../../playbook/agentx/agentx-service-profiling.yaml) |
 
 ### 本地部署与在线 API 的模型变量
 
@@ -143,7 +144,7 @@ networkLatency: # 放在 benchmark.solver.config 下
 
 报告分别展示 profiling 与 warmup；TTFT、ITL、请求延迟和 Interactivity 的分布来自官方导出，吞吐使用 Harness 的测量时间，各点的分位数不合并。缺失值显示未知，token usage 只统计预热和测量均有数据的字段，不代表服务商账单。
 
-配置多个并发点时，根 `report.md` 只列出测量点状态和独立报告链接。例如 `[1, 4, 8]` 分别生成 `points/c1/report.md`、`points/c4/report.md`、`points/c8/report.md`，同目录各有一份 `metrics.json`。每份报告只包含本档的请求性能、预热、vLLM、逐设备/芯片 NPU 指标、耗时、token usage 和 attempt 记录；不混入其他档位的统计。失败或尚未运行的档位也有独立状态页。只有一个并发点时，详细报告仍为根 `report.md`。
+未配置 `engineMetrics` 和 `profiling` 的常规压测中，配置多个并发点时，根 `report.md` 只列出测量点状态和独立报告链接。例如 `[1, 4, 8]` 分别生成 `points/c1/report.md`、`points/c4/report.md`、`points/c8/report.md`，同目录各有一份 `metrics.json`。每份报告只包含本档的请求性能、预热、vLLM、逐设备/芯片 NPU 指标、耗时、token usage 和 attempt 记录；不混入其他档位的统计。失败或尚未运行的档位也有独立状态页。只有一个并发点时，详细报告仍为根 `report.md`。
 
 根 `metrics.json` 保留整批机器数据和子报告目录，便于程序读取；各点指标从各自记录重新计算。各点报告中的原始结果链接仍指向本 run 下对应的 attempt，不复制轨迹和原始产物。整批继续共用一个 run ID、来源锁定和续跑状态，三档按顺序执行。
 
@@ -246,31 +247,25 @@ SSH 认证属于部署操作，不写入实验 YAML。模型必须支持所选 T
 
 适配会把上游累计采集错误数写入原始导出的 `evaluator_collection_error_count`，并在摘要的可选 `telemetry.collectionErrors` 中保存。该计数是全部端点合计，只在报告中展示一次，不分配给每个来源，也不据此自动把所有来源改成 `partial`。历史摘要缺少该字段时显示“未记录”，不假定错误数为零。
 
-### msprof 服务级 Profiling（可选）
+## 一次运行采集正式性能与服务端 profiling
 
-`telemetry.msprof` 在 vLLM/Ascend 遥测之外叠加 sample-based CANN 占空比采集。要求 `hardware: npu`，宿主或 toolbox 内可用 `msprof` 二进制（PATH 或已知 CANN 路径）；二进制缺失时该来源标记失败，不阻塞请求遥测。
+先启动支持流式 Chat Completions、Prometheus `/metrics` 及 SGLang `/start_profile`、`/stop_profile` 的 Ascend 推理服务，并启用 NPU profiler 自动导出。服务进程和 evaluator 协调端须以相同绝对路径读写 `profiling.traceDirectory`。使用管理容器时也要挂载该目录。协调端需有 Python 3.11–3.13 解析导出文件。按快速上手设置模型地址、密钥和匹配的 tokenizer，运行一次：
 
-```yaml
-telemetry:
-  vllm:
-    endpoint: http://127.0.0.1:18080/metrics
-  msprof:
-    devices:
-      - deviceId: 0
-      - deviceId: 1
-    freqHz: 10
-    metrics: ArithmeticUtilization
-    includeHbm: false
+```bash
+arsi-evaluator run playbook/agentx/agentx-service-profiling.yaml
 ```
 
-`freqHz` 为 1-100 整数（默认 10）；`metrics` 选择 AICore 指标集；`includeHbm` 额外采样 HBM 计数器（单位未核实，不参与判定）。设备 ID 与 Ascend 遥测一致，使用 `npu-smi` 物理 NPU 编号；`msprof` 接收对应的 `Chip Logic ID`，映射关系写入证据。
+示例按以下顺序发送真实推理请求：
 
-设备绑定必须提供，支持结构化 `devices` 列表或紧凑的 `deviceIds` 字符串：`deviceIds: "4,5,6,7"` 采样物理卡 4、5、6、7；`deviceIds: "all"` 在采集时通过 `npu-smi info -m` 解析宿主全部计算芯片。仅在宿主全部设备都授权采样时使用 "all"，否则显式传入授权列表。
+| 阶段 | 并发 1 | 并发 8 | 报告 |
+| --- | --- | --- | --- |
+| 正式压测 | 完整回放前 8 棵会话树 | 完整回放相同的 8 棵树 | 各档吞吐、TTFT、ITL、请求时延及配置的引擎指标 |
+| 服务端诊断 | 开启 profiler，完整回放 1 棵树，停止并导出 | 开启 profiler，完整回放 8 棵树，停止并导出 | 按并发、rank 列出设备算子和 kernel 数据 |
 
-结构化 `devices` 数组与逗号分隔的 `deviceIds` 字符串互斥，且都表示 `npu-smi` 物理卡号；`deviceIds` 供调用方通过环境变量替换驱动设备绑定，evaluator 代码不出现具体卡号。绑定正确性由调用方负责：所选设备必须与当次授权窗口的卡资源一致。未解析的占位符（例如未设置的 `"${MSPROF_DEVICES}"`）会在校验时报错并保留原始字符串。
+会话树包含多个请求及子 Agent；`traceCount` 数的是树。`profiling.traceCount: 8` 可让两个诊断档都回放前 8 棵。正式轮也支持 `scenario: standard`，保留原生预热和计时窗口，诊断轮仍使用有界回放。同一服务贯穿两轮，也可以用 `profiling.service` 指向 `services` 中同模型的诊断实例。正式轮的所有并发档成功后才开启 profiling；诊断轮请求及 profiler 开销不计入正式成绩。
 
-配置或推断出 metrics endpoint 且未填 `waitForTraffic` 时，默认等待服务端点出现持续 token 流量（等待上限有界；无流量时以 `traffic_wait_timeout` 及时结束，不采集空窗设备）；若 Harness 在流量开始前已结束，helper 返回 `harness_requested_before_collection`，不启动采集。显式 `waitForTraffic: false` 保持立即采集。Harness 结束后先通知 helper 收窗，再导出证据；主动收窗会导出已产生的部分证据。Solver 写入 `msprof-telemetry.json` 证据与 `msprof/{window.json,summary.json,SHA256SUMS}`；完成时摘要含请求物理卡号、解析芯片号、映射关系、逐卡 `mac_fp16_ratio` 和 `profiling-summary v1` 契约及字段可用性标注。失败记录在 attempt 中，不阻塞测评主线。
+`engineMetrics` 接受服务实际暴露的 Prometheus 样本名。回放模式在负载前后各读取一次，标准模式使用原生正式窗口内的首末采样。保留每组标签的读数，对单调计数器给出增量，缺失或重置标为 `partial`。只配置 `engineMetrics` 时只跑正式轮。旧配置 `solver.config.telemetry.msprof` 请改用示例中的 `benchmark.config.profiling`；旧报告仍可离线重建。新采集来自服务导出，原有 `mac_fp16_ratio` 等命令行硬件计数器没有直接对应值。
 
-`mac_fp16_ratio` 是 msprof sample-based 采集的 AICore FP16 MAC 占空比真值，与 `npu-smi` AICore% 无对应关系；`MetricSummary.sqlite` 的 `aic_mac_ratio_extra` 保留 source-specific-uncalibrated 标注。采集与 `acl_task_time`、torch profiler 同窗互斥，不得同开。
+一次运行生成一份 `report.md` 和 `metrics.json`。报告列出每档结果的相对路径。正式 attempt 的 `artifacts/agentx/outputs/point-<并发>/` 保存 Harness 原始输出；诊断 attempt 的 `artifacts/agentx/profiling/point-<并发>/` 下，`outputs/` 保存诊断回放，`trace/` 保存各 rank 已解析的导出文件。每个已采集的 attempt 另有 `artifacts/agentx/collections.json`。完整原始 trace 留在共享目录。只有主机事件时标为 `host-only`，控制请求或导出失败时显示诊断失败，已完成的正式数据仍可查看。
 
 [返回用户手册](../README.zh-CN.md) · [快速上手](../quick-start.zh-CN.md)

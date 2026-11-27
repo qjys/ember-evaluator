@@ -1,12 +1,10 @@
 import type { HardwareKind } from "../../../../../core/contracts/hardware.js";
 import { expectNonEmptyString, expectRecord, rejectUnknown } from "../../../../../core/validation/input.js";
-import { parseMsprofConfig } from "./msprof-telemetry.js";
 
 export type AgentXTelemetryConfig = {
   vllm?: { endpoint: string };
   ascend?: { endpoint: string; deviceId: number; chipId: number }
     | { mode: "local"; devices: { deviceId: number; chipId?: number }[] };
-  msprof?: import("./msprof-telemetry.js").MsprofConfig;
 };
 export type TelemetrySeries = {
   metric: string; unit: string; type: "gauge" | "counter"; labels: Record<string, string>;
@@ -43,7 +41,8 @@ function integer(value: unknown): number {
 }
 export function parseTelemetryConfig(value: unknown, hardware: HardwareKind = "npu"): AgentXTelemetryConfig {
   const raw = expectRecord(value, "agentx-replay.telemetry");
-  rejectUnknown(raw, ["vllm", "ascend", "msprof"], "agentx-replay.telemetry");
+  if (raw.msprof !== undefined) throw new TypeError("AgentX telemetry.msprof was retired; configure benchmark.config.profiling.traceDirectory");
+  rejectUnknown(raw, ["vllm", "ascend"], "agentx-replay.telemetry");
   const result: AgentXTelemetryConfig = {};
   if (raw.vllm !== undefined) {
     const v = expectRecord(raw.vllm, "telemetry.vllm");
@@ -71,11 +70,7 @@ export function parseTelemetryConfig(value: unknown, hardware: HardwareKind = "n
       result.ascend = { endpoint: endpoint(v.endpoint), deviceId: integer(v.deviceId), chipId: integer(v.chipId) };
     }
   }
-  if (raw.msprof !== undefined) {
-    if (hardware !== "npu") throw new TypeError("AgentX telemetry.msprof requires hardware=npu; selected hardware=gpu. GPU hardware telemetry is not implemented");
-    result.msprof = parseMsprofConfig(raw.msprof);
-  }
-  if (!result.vllm && !result.ascend && !result.msprof) throw new TypeError("AgentX telemetry requires at least one source");
+  if (!result.vllm && !result.ascend) throw new TypeError("AgentX telemetry requires at least one source");
   return result;
 }
 
