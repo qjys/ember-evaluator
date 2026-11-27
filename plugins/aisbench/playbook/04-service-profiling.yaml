@@ -1,0 +1,32 @@
+services:
+  default:
+    model: ${MODEL_NAME}
+    base_url: ${MODEL_ENDPOINT}
+    api_key: ${MODEL_API_KEY}
+benchmark:
+  name: aisbench
+  scenario: native
+  config:
+    backend: vllm_api_general_chat
+    datasets: [textvqa_gen_base64]
+    concurrency: [1, 8]
+    dataCount: 16
+    warmups: 1
+    stream: true
+    engineMetrics: ["sglang:prompt_tokens_total", "sglang:generation_tokens_total"]
+    profiling:
+      traceDirectory: /data/shared/aisbench-traces
+      exportTimeoutSeconds: 1800
+      # service: diagnostic  # Optional second entry in services, serving the same model.
+  solver:
+    name: aisbench-ssh
+    config:
+      tokenizerPath: /data/tokenizers/vl
+      remote:
+        ssh: { host: benchmark-server, user: benchmark }
+        pythonExecutable: /opt/conda/envs/aisbench/bin/python
+        aisbenchVersion: ${AISBENCH_VERSION}
+        workingDirectory: /opt/benchmark
+        workRoot: /data/evaluator/aisbench
+output:
+  directory: ../../../results/aisbench-service-profiling

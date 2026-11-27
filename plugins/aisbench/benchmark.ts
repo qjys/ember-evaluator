@@ -64,7 +64,11 @@ export function validateAisbenchRun(config: EffectiveConfig, usesModel = true): 
     throw new TypeError("AISBench requires local environment and local scheduler concurrency=1");
   if (config.run.preparation?.mode === "pipeline") throw new TypeError("AISBench does not support pipeline preparation");
   if (!usesModel) return;
-  const model = config.services[config.solver.service];
+  validateAisbenchService(config, config.solver.service);
+}
+
+export function validateAisbenchService(config: EffectiveConfig, name: string): void {
+  const model = config.services[name];
   if (!model || model.api !== "openai-completions" || model.endpoint === null)
     throw new TypeError("AISBench requires an OpenAI Chat Completions endpoint");
   if (model.maxTokens !== undefined) throw new TypeError("Set output length in the AISBench workload or maxOutputTokens; remove services maxTokens");

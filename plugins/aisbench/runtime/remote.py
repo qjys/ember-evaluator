@@ -39,10 +39,11 @@ def identity(pid):
 
 
 def redact(text, secret):
-    if secret:
-        forms = {secret, json.dumps(secret)[1:-1], json.dumps(secret, ensure_ascii=False)[1:-1], repr(secret)[1:-1], html.escape(secret)}
-        for form in sorted(forms, key=len, reverse=True):
-            text = text.replace(form, "[REDACTED]")
+    secrets = secret if isinstance(secret, list) else [secret]
+    forms = {form for key in secrets if key for form in
+             (key, json.dumps(key)[1:-1], json.dumps(key, ensure_ascii=False)[1:-1], repr(key)[1:-1], html.escape(key))}
+    for form in sorted(forms, key=len, reverse=True):
+        text = text.replace(form, "[REDACTED]")
     return text
 
 
@@ -139,7 +140,7 @@ def collect(root, secret, native=False):
     run = root / "run"
     artifacts = root / "artifacts"
     skipped = []
-    for name in ["native-plan.json", "aisbench_result.csv", "aisbench.log", "aisbench_all.log", "aisbench_client.log", "outputs"]:
+    for name in ["native-plan.json", "collections.json", "profiling", "aisbench_result.csv", "aisbench.log", "aisbench_all.log", "aisbench_client.log", "outputs"]:
         source = run / name
         if not source.exists() or source.is_symlink():
             continue
@@ -149,7 +150,7 @@ def collect(root, secret, native=False):
                 continue
             # Upstream snapshots contain executable config and can embed escaped credentials.
             relative = item.relative_to(run)
-            if native and ("configs" in relative.parts or item.suffix.lower() not in {".csv", ".json", ".jsonl", ".log", ".txt", ".md", ".html", ".yaml", ".yml"}):
+            if native and ("configs" in relative.parts or item.suffix.lower() not in {".csv", ".json", ".jsonl", ".log", ".out", ".txt", ".md", ".html", ".yaml", ".yml"}):
                 skipped.append({"path": relative.as_posix(), "reason": "private config or unsupported format"})
                 continue
             dest = artifacts / relative
@@ -185,7 +186,7 @@ def supervise(root):
     stopped = threading.Event()
     cancelled = threading.Event()
     child = None
-    secret = config.get("apiKey", "")
+    secret = [config.get("apiKey"), config.get("profileApiKey")]
     def heartbeat():
         while not stopped.wait(2):
             state["heartbeat"] = time.time()

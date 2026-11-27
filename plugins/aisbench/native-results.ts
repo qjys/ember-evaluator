@@ -5,6 +5,7 @@ import { parseCsv } from "./ssh/csv.js";
 import { pointStatus, recordsByTask } from "./metrics.js";
 import { expectRecord } from "./validation.js";
 import { escaped } from "./reporter.js";
+import type { NativeConfig } from "./native-config.js";
 
 type Group = { model: string; dataset: string; concurrency: number | null; status: string; file: string | null;
   totals: Record<string, JsonValue>; statistics: Record<string, string>[] };
@@ -18,6 +19,29 @@ async function jsonObjectFile(path: string): Promise<Record<string, JsonValue> |
     if (error instanceof SyntaxError) return null;
     throw error;
   }
+}
+
+export async function readServiceCollections(root: string, config: NativeConfig) {
+  const data = await jsonObjectFile(join(root, "collections.json"));
+  if (!Array.isArray(data?.points) || !data.points.length) throw new TypeError("Missing AISBench service collection points");
+  for (const raw of data.points) {
+    const point = expectRecord(raw, "AISBench service point");
+    if (typeof point.dataset !== "string" || typeof point.concurrency !== "number" ||
+        !(config.concurrency ?? [1]).includes(point.concurrency) || !["partial", "measured"].includes(String(point.performanceStatus)))
+      throw new TypeError("Invalid AISBench service point");
+    if (config.engineMetrics) {
+      const engine = expectRecord(point.engine, "engine metrics");
+      if (!Array.isArray(engine.series) || !["measured", "partial"].includes(String(engine.status))) throw new TypeError("Invalid engine metrics");
+    }
+    if (config.profiling) {
+      const profile = expectRecord(point.profiling, "profiling");
+      if (!["measured", "host-only", "failed", "skipped"].includes(String(profile.status)) ||
+          (profile.status === "measured" && (!Array.isArray(profile.exports) || !profile.exports.length ||
+            !profile.exports.every(row => expectRecord(row, "Ascend export").deviceEvidence === true))))
+        throw new TypeError("Invalid AISBench profiling evidence");
+    }
+  }
+  return data.points;
 }
 
 function count(totals: Record<string, JsonValue>, field: string) {
@@ -86,8 +110,16 @@ export class NativePerformanceMetrics implements Metrics {
           throw new TypeError("Invalid AISBench multimodal operation evidence");
         return { taskId, status: op.action === "prepare" ? "prepared" : "validated", manifestPath: op.manifestPath, groups };
       }
-      const complete = groups.length > 0 && groups.every(group => expectRecord(group, "AISBench group").status === "measured");
-      return { taskId, status: !groups.length ? "unrecognized" : complete ? "measured" : "partial", groups };
+      const collections = evidence.collections;
+      if (collections !== undefined && !Array.isArray(collections)) throw new TypeError("Invalid AISBench service collections");
+      const complete = groups.length > 0 && groups.every(group => expectRecord(group, "AISBench group").status === "measured") &&
+        (collections === undefined || collections.every(item => {
+          const p = expectRecord(item, "AISBench service point");
+          return p.performanceStatus === "measured" && [p.engine, p.profiling].every(part =>
+            part === undefined || expectRecord(part, "AISBench collection").status === "measured");
+        }));
+      return { taskId, status: !groups.length ? "unrecognized" : complete ? "measured" : "partial", groups,
+        ...(collections ? { collections } : {}) };
     });
     return { applicable: true, points };
   }
@@ -118,6 +150,37 @@ export class NativeMarkdownReporter implements Reporter {
             lines.push("| " + headers.map(key => escaped(String(fields[key] ?? ""))).join(" | ") + " |");
           }
           lines.push("");
+        }
+      }
+      for (const item of ("collections" in point ? point.collections : undefined) ?? []) {
+        const p = expectRecord(item, "AISBench service point");
+        lines.push(`### 服务端采集 · ${escaped(String(p.dataset))} · 并发 ${escaped(String(p.concurrency))}`, "");
+        if (p.error) lines.push(escaped(String(p.error)), "");
+        if (p.engine) {
+          const engine = expectRecord(p.engine, "engine metrics");
+          lines.push(`推理引擎指标 · ${escaped(String(engine.status))}`, "",
+            "| 服务端指标 | 压测前 | 压测后 | 计数器增量 |", "| --- | ---: | ---: | ---: |");
+          for (const raw of Array.isArray(engine.series) ? engine.series : []) {
+            const row = expectRecord(raw, "engine metric");
+            lines.push("| " + [row.series, row.before, row.after, row.delta].map(v => escaped(String(v ?? "—"))).join(" | ") + " |");
+          }
+          lines.push("");
+          if (Array.isArray(engine.missing) && engine.missing.length) lines.push("缺少指标 " + escaped(engine.missing.join(", ")), "");
+          if (Array.isArray(engine.errors)) for (const error of engine.errors) lines.push(escaped(String(error)), "");
+        }
+        if (p.profiling) {
+          const profile = expectRecord(p.profiling, "profiling");
+          lines.push(`Ascend profiling · ${escaped(String(profile.status))}`, "");
+          if (profile.error) lines.push(escaped(String(profile.error)), "");
+          if (profile.traceDirectory) lines.push("服务端 trace 目录 " + escaped(String(profile.traceDirectory)), "");
+          for (const raw of Array.isArray(profile.exports) ? profile.exports : []) {
+            const rank = expectRecord(raw, "Ascend export");
+            lines.push("导出文件 " + escaped(String(rank.artifactDirectory)), "",
+              "| 设备证据 | 算子设备耗时 (µs) | 算子 Host 耗时 (µs) | Kernel 数 | Kernel 执行 (µs) | Kernel 等待 (µs) |",
+              "| --- | ---: | ---: | ---: | ---: | ---: |",
+              "| " + [rank.deviceEvidence, rank.operatorDeviceUs, rank.operatorHostUs, rank.kernelCount, rank.kernelDurationUs,
+                rank.kernelWaitUs].map(v => escaped(String(v ?? "—"))).join(" | ") + " |", "");
+          }
         }
       }
     }

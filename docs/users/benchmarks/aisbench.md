@@ -80,4 +80,24 @@ The `aisbench-ssh` solver maps `tokenizerPath` to `--path`. Omit it to keep the 
 
 You can also select an existing full native configuration with `configFile: ./bench/run.py` and optional sibling `files: [./bench/helper.py]`, or with `remoteConfigFile: /bench/run.py`. Omit `backend` and `datasets` in that case. The file owns model routing and can read `EVALUATOR_AISBENCH_MODEL`, `EVALUATOR_AISBENCH_BASE_URL` and `EVALUATOR_AISBENCH_API_KEY`. Local Python files are hashed and transferred. Data and weights stay on the load generator.
 
-Evaluator's dry run validates the local configuration and lists tasks. During execution, the selected remote version must support the requested options and datasets. The redacted command is saved under `artifacts/aisbench/native-plan.json` in the attempt. Native text artifacts live in the adjacent `outputs/` directory, and `collection.json` lists omitted private configs and unsupported file formats. Reports preserve per-group request counts, throughput and available latency percentiles with their upstream units. Missing groups, failed requests and unrecognized output are identified in the report. Server-side GPU/NPU profiler tracing is a separate operation.
+Evaluator's dry run validates the local configuration and lists tasks. During execution, the selected remote version must support the requested options and datasets. The redacted command is saved under `artifacts/aisbench/native-plan.json` in the attempt. Native text artifacts live in the adjacent `outputs/` directory, and `collection.json` lists omitted private configs and unsupported file formats. Reports preserve per-group request counts, throughput and available latency percentiles with their upstream units. Missing groups, failed requests and unrecognized output are identified in the report.
+
+## Collect serving performance and Ascend profiles in one run
+
+Run the [TextVQA service profiling playbook](../../../plugins/aisbench/playbook/04-service-profiling.yaml) after configuring the endpoint, SSH host and shared trace directory. AISBench completes all ordinary loads first, then runs diagnostic loads at concurrency 1 and 8 using the same datasets. Generated multimodal data is prepared once.
+
+```bash
+arsi-evaluator run plugins/aisbench/playbook/04-service-profiling.yaml
+```
+
+The following options under `benchmark.config` are independent. Both are optional for native named backends with datasets, generated multimodal inputs or a manifest. Standalone Python configs select their own endpoints.
+
+| Field | Behavior |
+| --- | --- |
+| `engineMetrics` | List Prometheus sample names exposed at the ordinary service’s `/metrics`. Warmup finishes before the first snapshot. The second snapshot follows the measured load. Results preserve label sets, gauge readings and deltas for declared counters. Missing series, counter resets or scrape errors give partial results. |
+| `profiling.traceDirectory` | Writable absolute directory mounted at the same path on the SSH host and the SGLang Ascend server. The deployment must support `POST /start_profile`, `POST /stop_profile` and NPU auto-export. Enable `SGLANG_NPU_PROFILE_AUTO_EXPORT=1` where required. Reserve the instance because the profiler controls the whole service. |
+| `profiling.service` | Defaults to the solver service. Select a second named service to use its endpoint and credentials for both diagnostic inference and control requests. Use the same model, weights and candidate build. |
+| `profiling.requestsPerPoint` | Requests per dataset in each diagnostic window. Defaults to one concurrency wave, capped by that point’s configured request count. Timed pressure is disabled for this pass. A separate warmup honors `warmups` and defaults to one request; zero disables it. |
+| `profiling.exportTimeoutSeconds` | Maximum wait for each export, default 1800 seconds. Allow enough time for all windows in the run timeout. |
+
+A trace covers one native command, including its startup, requests and reporting. Datasets selected in that command share a window. Generated image presets have independent windows. Read ordinary throughput and latency in `groups` and server evidence in `collections` under `aisbench-native-performance` in `metrics.json`. The Markdown report shows engine readings and per-rank operator and kernel times in microseconds. Full raw exports remain in the shared directory. CSV/JSON evidence is also collected under the attempt’s `artifacts/aisbench/profiling/point-*/trace/`. Incomplete ordinary workloads skip profiling. Host-only traces, control failures and export failures remain visible alongside completed baseline measurements.

@@ -14,6 +14,21 @@ import { AisbenchRemoteClient } from "../../ssh/client.js";
 import { aisbenchSnapshot } from "../fixtures/results.js";
 
 const selection = { backend: "vllm_api_general_chat", datasets: ["textvqa_gen_base64"] };
+test("collects native performance before profiling, preserving partial results and stopping failed captures", () => {
+  const fixture = fileURLToPath(new URL("../fixtures/check-collections.py", import.meta.url));
+  expect(execFileSync(process.platform === "win32" ? "python" : "python3", ["-B", fixture], { encoding: "utf8" }))
+    .toContain("Service collection checks passed");
+});
+test("validates service collection parameters before accessing the benchmark host", () => {
+  const profiling = { traceDirectory: "/shared/traces", service: "diagnostic", requestsPerPoint: 2 };
+  const raw = { ...selection, dataCount: 2, profiling, engineMetrics: ["sglang:prompt_tokens_total"] };
+  expect(parseNativeConfig(parseNativeConfig(raw))).toEqual(parseNativeConfig(raw));
+  for (const change of [{ engineMetrics: [] }, { engineMetrics: [""] }, { profiling: { traceDirectory: "local" } },
+    { dataCount: 1 }, { profiling: { ...profiling, unknown: true } }]) {
+    expect(() => parseNativeConfig({ ...raw, ...change })).toThrow();
+  }
+  expect(() => parseNativeConfig({ configFile: "./config.py", profiling })).toThrow(/native backend/u);
+});
 const generated = { backend: selection.backend, concurrency: [1, 8], dataCount: 8,
   multimodalGeneration: { imageScenario: "single_1080p", textTokens: 32, mmmuParquetDir: "/data/MMMU" } };
 
@@ -85,11 +100,14 @@ test("hashes uploaded scripts and detects changes before execution", async () =>
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
-test("runs one native SSH job and rebuilds per-group evidence from upstream outputs", async () => {
+test.each([false, true])("runs one native SSH job and rebuilds evidence with service collection %s", async collect => {
   const root = await mkdtemp(join(tmpdir(), "native-evidence-"));
   const signal = new AbortController().signal;
   const runtime = factory(root);
-  const config = parseNativeConfig({ ...selection, concurrency: [1, 8], dataCount: 2 });
+  const config = parseNativeConfig({ ...selection, concurrency: [1, 8], dataCount: 2,
+    ...(collect ? { profiling: { traceDirectory: "/shared", service: "diagnostic" } } : {}) });
+  if (collect) runtime.services.diagnostic = { model: { name: "vl", endpoint: "http://diag/v1", api: "openai-completions", provider: null },
+    auth: { value: "fixture-diagnostic-key", reference: null } };
   const bench = new NativeBenchmark(config, runtime);
   const source = await bench.resolveSource(null, signal);
   const refs = [];
@@ -104,6 +122,9 @@ test("runs one native SSH job and rebuilds per-group evidence from upstream outp
   vi.spyOn(AisbenchRemoteClient.prototype, "status").mockResolvedValueOnce({ state: "missing", phase: "", offset: 0, log: "", heartbeat: null, exitCode: null })
     .mockResolvedValue({ state: "completed", phase: "finished", offset: 0, log: "", heartbeat: null, exitCode: 0 });
   vi.spyOn(AisbenchRemoteClient.prototype, "download").mockImplementation(async (_job, _fingerprint, dir) => {
+    if (collect) await writeFile(join(dir, "collections.json"), JSON.stringify({ points: [1, 8].map(concurrency =>
+      ({ dataset: "textvqa", concurrency, performanceStatus: concurrency === 1 ? "measured" : "partial",
+        profiling: { status: "skipped", error: "Incomplete performance window" } })) }));
     const stamp = join(dir, "outputs", "timestamp");
     await mkdir(join(stamp, "performances", "vl-bs1"), { recursive: true });
     await writeFile(join(stamp, "combos_manifest.json"), JSON.stringify({ combos: [1, 8].map(n => ({ batch_size: n, model_abbr: "vl-bs" + n, dataset_abbr: "textvqa" })) }));
@@ -119,6 +140,7 @@ test("runs one native SSH job and rebuilds per-group evidence from upstream outp
     const paths = { root, agent: join(root, "agent"), artifacts: join(root, "artifacts"), verifier: join(root, "verifier") };
     const result = await solver.solve(task.input, session, { key, paths, signal });
     expect(start.mock.calls[0]?.[3]).toMatchObject({ config: { native: config, endpoint: "http://model:8000/" } });
+    if (collect) expect(start.mock.calls[0]?.[3]).toMatchObject({ config: { profileEndpoint: "http://diag/", profileApiKey: "fixture-diagnostic-key" } });
     const verdict = await bench.verify(task, result, null, signal);
     const snapshot = aisbenchSnapshot();
     snapshot.run.source = source;
@@ -129,6 +151,10 @@ test("runs one native SSH job and rebuilds per-group evidence from upstream outp
     const metrics = await new NativePerformanceMetrics().compute(snapshot);
     expect(metrics.points[0]).toMatchObject({ status: "partial", groups: [{ concurrency: 1, status: "measured" }, { concurrency: 8, status: "missing" }] });
     expect(await new NativeMarkdownReporter().render(snapshot)).toContain("33 ms");
+    if (collect) {
+      expect(metrics.points[0]).toMatchObject({ collections: [{ concurrency: 1 }, { concurrency: 8 }] });
+      expect(await new NativeMarkdownReporter().render(snapshot)).toContain("Ascend profiling · skipped");
+    }
     expect(await readFile(join(paths.agent, "native-summary.json"), "utf8")).not.toContain("private");
     expect(await readNativeGroups(paths.agent)).toEqual([]);
     expect(await readNativeGroups(join(paths.artifacts, "aisbench"), [1, 8], 3)).toMatchObject([

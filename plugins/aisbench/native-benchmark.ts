@@ -3,7 +3,7 @@ import { readFile, realpath } from "node:fs/promises";
 import { isAbsolute, relative, sep } from "node:path";
 import { fingerprintConfig } from "arsi-evaluator";
 import type { Benchmark, EffectiveConfig, PluginFactoryContext, PreparedTask, SolveResult, SourceLock, TaskRef } from "arsi-evaluator";
-import { validateAisbenchRun } from "./benchmark.js";
+import { validateAisbenchRun, validateAisbenchService } from "./benchmark.js";
 import type { NativeConfig } from "./native-config.js";
 import { bundleDigest } from "./ssh/bundle.js";
 import { expectNonEmptyString, expectRecord } from "./validation.js";
@@ -29,6 +29,12 @@ export class NativeBenchmark implements Benchmark {
 
   validateRun(config: EffectiveConfig): void {
     validateAisbenchRun(config, this.config.multimodalAction !== "prepare" && this.config.multimodalAction !== "validate");
+    const profileService = this.config.profiling?.service;
+    if (profileService) {
+      validateAisbenchService(config, profileService);
+      if (config.services[profileService]?.name !== config.services[config.solver.service]?.name)
+        throw new TypeError("AISBench performance and profiling services must serve the same model");
+    }
     if (this.config.multimodalGeneration && !config.solver.config.tokenizerPath)
       throw new TypeError("multimodalGeneration requires benchmark.solver.config.tokenizerPath on the benchmark host");
     if (Array.isArray(config.solver.config.podInfo) && config.solver.config.podInfo.length)

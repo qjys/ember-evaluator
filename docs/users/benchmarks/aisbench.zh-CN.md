@@ -117,4 +117,26 @@ Solver 使用 `aisbench-ssh`。其中 `tokenizerPath` 映射到 `--path`。省�
 
 已有完整原生配置时，可用 `configFile: ./bench/run.py` 及可选 `files: [./bench/helper.py]`，或用 `remoteConfigFile: /bench/run.py` 替代 `backend` 和 `datasets`。配置文件自行定义模型和服务，可读环境变量 `EVALUATOR_AISBENCH_MODEL`、`EVALUATOR_AISBENCH_BASE_URL`、`EVALUATOR_AISBENCH_API_KEY`。本地 Python 文件按摘要核对并上传，数据与模型在远端准备。
 
-`run --dry-run` 在本地校验并列出任务。正式运行时检查远端版本，原生参数和数据集须由该版本支持。脱敏调用见 attempt 下 `artifacts/aisbench/native-plan.json`，文本产物在同目录的 `outputs/`，跳过的私有配置或不支持格式见 `collection.json`。报告按原生模型和数据集分组，保留请求数、吞吐和已有时延分位数的单位。缺组、请求失败或无法识别的结果在报告中单独标出。服务端 GPU/NPU profiler 时间线需另行采集。
+`run --dry-run` 在本地校验并列出任务。正式运行时检查远端版本，原生参数和数据集须由该版本支持。脱敏调用见 attempt 下 `artifacts/aisbench/native-plan.json`，文本产物在同目录的 `outputs/`，跳过的私有配置或不支持格式见 `collection.json`。报告按原生模型和数据集分组，保留请求数、吞吐和已有时延分位数的单位。缺组、请求失败或无法识别的结果在报告中单独标出。
+
+## 一次运行采集推理性能和 Ascend profiling
+
+[TextVQA 双轮示例](../../../plugins/aisbench/playbook/04-service-profiling.yaml)使用同一服务先跑完并发 1、8 的正式压测，再依次采两档 trace。正式结果仍包括吞吐、请求时延和流式首 token 时延。图片和请求由 AISBench 发送；生成式多模态输入在同一作业内只制数一次。填写服务、SSH 和共享目录后运行：
+
+```bash
+arsi-evaluator run plugins/aisbench/playbook/04-service-profiling.yaml
+```
+
+在 `benchmark.config` 设置以下独立可选项，省略两项时沿用普通压测：
+
+| 参数 | 用法 |
+| --- | --- |
+| `engineMetrics` | 填写普通服务的 Prometheus `/metrics` 样本名。每档先预热，随后在正式压测前后各读一次。按标签保存两次读数，对有类型声明的 counter 给出增量。服务未提供的指标、重置的计数器及采集失败会标为部分结果。 |
+| `profiling.traceDirectory` | 压测机与 SGLang Ascend 服务以相同绝对路径挂载的可写目录。服务须支持 `POST /start_profile`、`POST /stop_profile` 和 NPU 自动导出。按部署启用 `SGLANG_NPU_PROFILE_AUTO_EXPORT=1`。控制接口影响整个实例，采集期间请独占服务。 |
+| `profiling.service` | 默认复用 solver 的服务。使用独立诊断实例时填 `services` 下的名称，两端提供相同的模型、权重与候选版本。第二轮推理请求及控制调用使用该服务的 URL 和凭据。 |
+| `profiling.requestsPerPoint` | 每档每个数据集的诊断请求数，默认取并发数与该档正式请求数的较小值。诊断轮复用数据和生成参数，关闭持续压测。按 `warmups` 先独立预热，省略时诊断轮预热一次，填 0 可关闭。 |
+| `profiling.exportTimeoutSeconds` | 每个窗口等待导出文件的上限，默认 1800 秒。为整个 run 留足时间。 |
+
+这些选项适用于 `scenario: native` 下由 evaluator 绑定服务的 `backend` + `datasets`、`multimodalGeneration` 或 `multimodalManifest`。独立 Python 配置文件自行选择服务。一个诊断窗口覆盖一档并发的一次 AISBench 命令，包含命令启动、请求和汇总；若命令同时选择多个原生数据集，trace 覆盖它们的合计负载。各个生成图片规格有独立窗口。
+
+在 `report.md` 查看正式压测和每档服务端读数。在 `metrics.json` 的 `aisbench-native-performance` 中，`groups` 保存普通压测结果，`collections` 保存引擎快照及每个 rank 的算子、Kernel、阶段耗时和 Top 算子。完整原始导出留在共享目录，用于解析的 CSV/JSON 随 attempt 保存在 `artifacts/aisbench/profiling/point-*/trace/`。诊断请求不会计入正式吞吐。正式请求不完整时跳过 profiling，只有 Host 数据时标为 `host-only`，接口或导出失败时记录错误并保留已取得的普通性能数据。

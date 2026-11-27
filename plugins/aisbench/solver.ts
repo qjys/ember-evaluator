@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile, appendFile } from "node:fs/promises";
 import { join, posix } from "node:path";
 import { setTimeout } from "node:timers/promises";
-import { bindSolverService, fingerprintConfig, redactDiagnostic } from "arsi-evaluator";
+import { bindService, bindSolverService, fingerprintConfig, redactDiagnostic } from "arsi-evaluator";
 import type { Solver, AttemptContext, EnvironmentSession, PublicTask, SolveResult, PluginFactoryContext } from "arsi-evaluator";
 import { expectNonEmptyString, expectPositiveInteger, expectRecord } from "./validation.js";
 import { AisbenchRemoteClient, aisbenchBaseUrl } from "./ssh/client.js";
@@ -13,7 +13,7 @@ import { parseAisbenchSummary } from "./evidence.js";
 
 import { nativeFiles } from "./native-benchmark.js";
 import { parseNativeConfig } from "./native-config.js";
-import { readNativeGroups } from "./native-results.js";
+import { readNativeGroups, readServiceCollections } from "./native-results.js";
 
 export class AisbenchSshSolver implements Solver {
   constructor(private readonly config: AisbenchSshConfig, private readonly runtime: PluginFactoryContext) {}
@@ -44,11 +44,15 @@ export class AisbenchSshSolver implements Solver {
     const dataOnly = action === "prepare" || action === "validate";
     const service = dataOnly ? undefined : bindSolverService(this.runtime);
     const apiKey = service?.auth.value ?? "";
+    const profileService = native?.profiling?.service ? bindService(this.runtime, native.profiling.service) : undefined;
+    const profileApiKey = profileService?.auth.value ?? "";
+    const secrets = [apiKey, profileApiKey].filter(Boolean);
     const client = new AisbenchRemoteClient(this.config, digest);
     const identity = createHash("sha256").update(JSON.stringify([context.key.runId, context.key.taskId])).digest("hex");
     const jobDir = posix.join(this.config.remote.workRoot, "jobs", identity);
     const workingDirectory = this.config.remote.workingDirectory ?? this.config.remote.aisbenchWorkPath;
-    const config = { ...(native ? { native, uploads,
+    const config = { ...(profileService ? { profileEndpoint: aisbenchBaseUrl(expectNonEmptyString(profileService.model.endpoint, "profiling endpoint")), profileApiKey } : {}),
+      ...(native ? { native, uploads,
       ...(workingDirectory ? { workingDirectory } : {}) } : { workload: workload ?? null }),
       ...(service ? { serviceEndpoint: service.model.endpoint, model: service.model.name, apiKey,
         endpoint: aisbenchBaseUrl(expectNonEmptyString(service.model.endpoint, "aisbench service endpoint")) } : {}),
@@ -56,7 +60,7 @@ export class AisbenchSshSolver implements Solver {
       pythonExecutable: this.config.remote.pythonExecutable, ...(this.config.remote.aisbenchWorkPath ? { aisbenchWorkPath: this.config.remote.aisbenchWorkPath } : {}),
       aisbenchVersion: this.config.remote.aisbenchVersion, podInfo: this.config.podInfo };
     // Stable across credentials rotation and attempt retries; remote private config is never persisted locally.
-    const fingerprint = fingerprintConfig({ ...config, apiKey: "", bundleDigest: digest });
+    const fingerprint = fingerprintConfig({ ...config, apiKey: "", ...(profileService ? { profileApiKey: "" } : {}), bundleDigest: digest });
     const root = join(context.paths.artifacts, "aisbench");
     await mkdir(root, { recursive: true });
     await writeFile(join(context.paths.agent, "remote-job.json"), JSON.stringify({ jobDir, fingerprint, bundleDigest: digest }) + "\n");
@@ -67,7 +71,7 @@ export class AisbenchSshSolver implements Solver {
     let previousStatus: string | undefined;
     const readStatus = async (offset: number, signal: AbortSignal) => {
       const status = await client.status(jobDir, fingerprint, offset, signal);
-      const entry = { state: status.state, phase: redactDiagnostic(status.phase, [apiKey]), exitCode: status.exitCode };
+      const entry = { state: status.state, phase: redactDiagnostic(status.phase, secrets), exitCode: status.exitCode };
       const serialized = JSON.stringify(entry);
       if (serialized !== previousStatus) {
         await appendFile(session, sessionLine("status", entry));
@@ -77,7 +81,7 @@ export class AisbenchSshSolver implements Solver {
     };
     let started = false, terminal = false, collected = false;
     const log = async (text: string) => {
-      const safe = redactDiagnostic(text, [apiKey]);
+      const safe = redactDiagnostic(text, secrets);
       if (safe) { await appendFile(join(context.paths.agent, "remote.log"), safe); context.activity?.({ lines: safe.split(/\r?\n/u).filter(Boolean).slice(-20) }); }
     };
     try {
@@ -115,8 +119,11 @@ export class AisbenchSshSolver implements Solver {
           } else if (!native.pressureSeconds && !native.options?.pressure) expectedRequests = native.dataCount ?? count;
         }
         const groups = dataOnly ? [] : await readNativeGroups(root, native.concurrency, expectedRequests);
+        const collections = native.engineMetrics || native.profiling
+          ? await readServiceCollections(root, native) : undefined;
         const observations = { kind: "aisbench-native", schemaVersion: 1, taskId: input.id, taskDigest: fingerprintConfig(payload),
-          bundleDigest: digest, aisbenchVersion: this.config.remote.aisbenchVersion, groups, ...(datasetOperation ? { datasetOperation } : {}) };
+          bundleDigest: digest, aisbenchVersion: this.config.remote.aisbenchVersion, groups,
+          ...(collections ? { collections } : {}), ...(datasetOperation ? { datasetOperation } : {}) };
         await writeFile(join(context.paths.agent, "native-summary.json"), JSON.stringify(observations, null, 2) + "\n");
         return { finalText: datasetOperation ? `AISBench multimodal ${action} completed: ${datasetOperation.manifestPath}`
           : `AISBench exited successfully; ${groups.length} native performance groups found`,

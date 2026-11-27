@@ -10,6 +10,8 @@
 
 [原生多模态制数示例](playbook/03-generated-multimodal.yaml)组合单图 1080p、五图 720p 与并发 1、8。报告按四个组合展示，支持在正式压测前单独生成、保存并校验请求清单。
 
+[服务端 profiling 示例](playbook/04-service-profiling.yaml)在正式压测后复用同一数据采集 SGLang Ascend 算子耗时，支持单服务和独立诊断服务。
+
 ## 安装和构建
 
 需要按图片规格、文本长度和请求数生成负载时，使用[生成多模态数据示例](playbook/03-generated-multimodal.yaml)。压测机安装 AISBench 官方 Prefix Cache 插件后，Evaluator 会在同一远端作业内生成一次数据，再逐档测量。[制数配置说明](../../docs/users/benchmarks/aisbench.zh-CN.md#按图片规格生成数据)

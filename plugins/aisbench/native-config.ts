@@ -13,6 +13,8 @@ type MultimodalGeneration = {
   outputDirectory?: string;
 };
 export type NativeConfig = {
+  engineMetrics?: string[];
+  profiling?: { traceDirectory: string; service?: string; requestsPerPoint?: number; exportTimeoutSeconds?: number };
   backend?: string[]; datasets?: Dataset[]; configFile?: string; files?: string[]; remoteConfigFile?: string;
   multimodalGeneration?: MultimodalGeneration;
   multimodalManifest?: string;
@@ -92,7 +94,7 @@ export function parseNativeConfig(value: unknown): NativeConfig {
   const v = expectRecord(value, "aisbench native config");
   rejectUnknown(v, ["backend", "datasets", "configFile", "files", "remoteConfigFile", "concurrency", "dataCount", "requestRate",
     "warmups", "maxOutputTokens", "stream", "pressureSeconds", "speculativeDecoding", "generationParams", "summarizer", "options",
-    "multimodalGeneration", "multimodalManifest", "multimodalAction"], "aisbench native config");
+    "multimodalGeneration", "multimodalManifest", "multimodalAction", "profiling", "engineMetrics"], "aisbench native config");
   const result: NativeConfig = {};
   const multimodal = v.multimodalGeneration !== undefined || v.multimodalManifest !== undefined;
   if (multimodal) {
@@ -178,6 +180,27 @@ export function parseNativeConfig(value: unknown): NativeConfig {
         throw new TypeError(`options.${key} conflicts with a managed parameter or is invalid`);
       if (key.startsWith("no-") && Object.hasOwn(result.options, canonical)) throw new TypeError(`Conflicting options.${key} and options.${canonical}`);
       if (item === null || (Array.isArray(item) && item.length === 0)) throw new TypeError(`options.${key} requires a value`);
+    }
+  }
+  if (v.profiling !== undefined || v.engineMetrics !== undefined) {
+    if (!result.backend || ["prepare", "validate"].includes(result.multimodalAction ?? "run"))
+      throw new TypeError("Service collections require a native backend with datasets or multimodal inputs in run mode");
+    if (v.engineMetrics !== undefined) {
+      if (!Array.isArray(v.engineMetrics) || !v.engineMetrics.length ||
+          !v.engineMetrics.every((m): m is string => typeof m === "string" && /^[a-zA-Z_:][a-zA-Z0-9_:]*$/u.test(m)) ||
+          new Set(v.engineMetrics).size !== v.engineMetrics.length)
+        throw new TypeError("engineMetrics must list distinct Prometheus metric names");
+      result.engineMetrics = v.engineMetrics;
+    }
+    if (v.profiling !== undefined) {
+      const p = expectRecord(v.profiling, "profiling");
+      rejectUnknown(p, ["traceDirectory", "service", "requestsPerPoint", "exportTimeoutSeconds"], "profiling");
+      result.profiling = { traceDirectory: remotePath(p.traceDirectory, "profiling.traceDirectory"),
+        ...(p.service === undefined ? {} : { service: expectNonEmptyString(p.service, "profiling.service") }),
+        ...(p.requestsPerPoint === undefined ? {} : { requestsPerPoint: expectPositiveInteger(p.requestsPerPoint, "profiling.requestsPerPoint") }),
+        ...(p.exportTimeoutSeconds === undefined ? {} : { exportTimeoutSeconds: expectPositiveInteger(p.exportTimeoutSeconds, "profiling.exportTimeoutSeconds") }) };
+      if (result.dataCount?.some(n => n < (result.profiling?.requestsPerPoint ?? 1)))
+        throw new TypeError("profiling.requestsPerPoint exceeds dataCount");
     }
   }
   return result;

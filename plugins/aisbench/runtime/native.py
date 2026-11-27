@@ -273,9 +273,27 @@ def main(root):
     from ais_bench.benchmark.cli.argument_parser import ArgumentParser
     from ais_bench.benchmark.cli.task_manager import TaskManager
     parser = ArgumentParser().parser
+    def execute(args, service, selected):
+        sys.argv = ["ais_bench", *args]
+        manager = TaskManager()
+        manager.config_manager = configured_manager(manager.args, service, selected)
+        return manager.run()
+
+    def public_args(args):
+        return ["ais_bench", *["--api-key=[REDACTED]" if a.startswith("--api-key=") else a for a in args]]
+
+    if native.get("profiling") or native.get("engineMetrics"):
+        from service_collections import run_collections
+        plan["commands"] = []
+        def run_window(service, name, selected, work_dir):
+            args = build_args(service, run, parser, name, work_dir)
+            plan["commands"].append(public_args(args))
+            (run / "native-plan.json").write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
+            return execute(args, service, selected)
+        run_collections(config, run, selections, run_window)
+        return 0
     commands = [(build_args(config, run, parser, name, work_dir), selected) for name, selected, work_dir in selections]
-    public_commands = [["ais_bench", *["--api-key=[REDACTED]" if a.startswith("--api-key=") else a for a in args]]
-                       for args, _ in commands]
+    public_commands = [public_args(args) for args, _ in commands]
     if len(commands) == 1:
         plan["argv"] = public_commands[0]
     else:
@@ -290,10 +308,7 @@ def main(root):
     (run / "native-plan.json").write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
     # The secret is passed to the installed CLI inside this process, outside OS argv.
     for args, selected in commands:
-        sys.argv = ["ais_bench", *args]
-        manager = TaskManager()
-        manager.config_manager = configured_manager(manager.args, config, selected)
-        code = manager.run()
+        code = execute(args, config, selected)
         if code:
             return code
     return 0
