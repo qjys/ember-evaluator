@@ -1,2 +1,6 @@
-export function searchWeb(query: string, service: { api: string | null; model: string; baseUrl: string | null; apiKey: string; exaOnly?: boolean },
-  signal: AbortSignal, skipExa?: boolean): Promise<{ backend: string; results: { title: string; url: string }[]; failures: string[]; content?: string }>;
+export function fetchWeb(url: string, allowedHosts: string[] | undefined, signal: AbortSignal): Promise<{
+  backend: "exa" | "http-fetch"; url: string; body: string; truncated: boolean;
+}>;
+export function searchWeb(query: string, signal: AbortSignal): Promise<{
+  backend: "exa"; results: { url: string; title: string }[]; content: string;
+}>;

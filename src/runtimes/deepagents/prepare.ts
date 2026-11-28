@@ -1,3 +1,4 @@
+import { normalizeAllowedHosts } from "../../core/policies/network-policy.js";
 import { pickSolverToolPolicy } from "../../core/validation/solver-tool-policy.js";
 import type { PublicTask } from "../../core/contracts/task.js";
 import { resolveModelInput } from "../multimodal/model.js";
@@ -337,6 +338,8 @@ async function deepagentsInput(preparation: BundlePreparation, input: PublicTask
     mcpServers: options.mcp === "disabled" ? [] : input.mcpServers ?? [],
     skillsDirectories: options.skills === "disabled" ? [] : input.skillsDirectories ?? [],
     imageTools: options.tools !== "none" && model.inputModalities?.includes("image") === true,
-    webSearch: options.tools !== "none" && options.webSearch !== "disabled" && model.endpoint !== null,
+    webSearch: options.tools !== "none" && options.webSearch !== "disabled",
+    ...(options.webFetch === "enabled" ? { webFetch: typeof session.solveNetwork === "object"
+      ? { allowedHosts: normalizeAllowedHosts(session.solveNetwork.allowedHosts) } : {} } : {}),
   }));
 }

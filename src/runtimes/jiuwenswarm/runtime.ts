@@ -166,8 +166,7 @@ export async function resolveJiuwenswarmCommand(
 export async function jiuwenswarmRuntimeInstallation(signal: AbortSignal): Promise<RuntimeInstallation> {
   signal.throwIfAborted();
   const files = [...await agentBundleRuntimeFiles(), ...bundleSearchFiles(),
-    { source: jiuwenswarmMultimodalRunner, target: "jiuwenswarm/multimodal-runner.py" }, jiuwenswarmToolPolicy,
-    { source: fileURLToPath(new URL("../shared/assets/reasoning_effort.py", import.meta.url)), target: "jiuwenswarm/reasoning_effort.py" }];
+    { source: jiuwenswarmMultimodalRunner, target: "jiuwenswarm/multimodal-runner.py" }, jiuwenswarmToolPolicy];
   const hash = createHash("sha256").update("jiuwenswarm-runtime-sdk-1");
   for (const file of files) {
     hash.update(file.target);
@@ -252,7 +251,6 @@ export async function jiuwenswarmDockerRuntimeInstallation(
     ...agentBundleFiles,
     ...bundleSearchFiles(),
     { source: jiuwenswarmMultimodalRunner, target: "jiuwenswarm/multimodal-runner.py" },
-    { source: fileURLToPath(new URL("../shared/assets/reasoning_effort.py", import.meta.url)), target: "jiuwenswarm/reasoning_effort.py" },
     jiuwenswarmToolPolicy,
     { source: jiuwenswarmRewriteRequirements, target: "jiuwenswarm/rewrite-requirements.mjs" },
     { source: jiuwenswarmRwLockProbe, target: "jiuwenswarm/probe-rwlock.py" },

@@ -10,7 +10,7 @@ import { nativeCodeModel } from "../fixtures/native-code-model.js";
 const names = ["qwencode", "kimicode", "minimaxcode", "opencode"] as const;
 const enabled = process.env.EVALUATOR_NATIVE_CODE_TEST === "local";
 
-async function run(name: NativeCodeName, api: string, toolPolicy: object, mode: "answer" | "read" | "loop" | "discover-fetch" = "answer", maxTurns = 4, pdf = false, contextWindow?: number) {
+async function run(name: NativeCodeName, api: string, toolPolicy: object, mode: "answer" | "read" | "loop" | "discover-fetch" | "fetch" = "answer", maxTurns = 4, pdf = false, contextWindow?: number, reasoningEffort: "low" | "max" = "low") {
   const root = resolve(process.env.EVALUATOR_NATIVE_CODE_ROOT ?? ".scratch/new-code-runtimes", name);
   const installation = await nativeCodeInstallation(name, new AbortController().signal);
   for (const file of installation.files.filter(file => !file.target.startsWith("package"))) {
@@ -26,7 +26,7 @@ async function run(name: NativeCodeName, api: string, toolPolicy: object, mode: 
     const filename = pdf ? "document.pdf" : "figure.png";
     const data = (await readFile(new URL("../fixtures/multimodal/" + filename, import.meta.url))).toString("base64");
     const input = { apiKey: "fixture-upstream-secret", token: "fixture-relay-token", baseUrl: mock.endpoint, model: "fixture-model", api,
-      reasoningEffort: "low", maxTokens: contextWindow ? 2345 : 70000, maxTurns, contextWindow, supportsImages: !pdf, supportsPdf: pdf, toolPolicy,
+      reasoningEffort, maxTokens: contextWindow ? 2345 : 70000, maxTurns, contextWindow, supportsImages: !pdf, supportsPdf: pdf, toolPolicy,
       prompt: mode === "answer" ? "Describe the image." : "Read input.txt then answer.",
       media: [{ name: filename, mediaType: pdf ? "application/pdf" : "image/png", data }] };
     const child = spawn(process.execPath, [join(root, "launch.mjs"), join(workspace, "state")], { cwd: workspace, windowsHide: true });
@@ -65,10 +65,23 @@ for (const name of ["qwencode", "opencode"] as const) {
   }, 190000);
 }
 
+test.skipIf(!enabled)("Qwen Code uses native thinking settings for the main turn and WebFetch extraction", async () => {
+  const result = await run("qwencode", "openai-completions", { webSearch: "disabled", webFetch: "enabled", mcp: "disabled" },
+    "fetch", 8, false, undefined, "max");
+  expect(result.code, result.diagnostic).toBe(0);
+  const extraction = result.requests.filter(request => JSON.stringify(request.messages).includes("Local webfetch evidence"));
+  expect(extraction).toHaveLength(1);
+  expect(extraction[0]?.reasoning_effort).toBe("none");
+  expect(result.requests[0]?.reasoning_effort).toBe("max");
+  const resumed = result.requests.find(request => JSON.stringify(request.messages).includes("call_fixture_fetch") &&
+    JSON.stringify(request.messages).includes("Status: 200 OK"));
+  expect(resumed?.reasoning_effort).toBe("max");
+}, 70000);
+
 for (const name of names) {
   test.skipIf(!enabled)(`${name} ${nativeCodeVersions[name]} transmits images without tools over all supported APIs`, async () => {
     for (const api of ["openai-completions", "openai-responses", "anthropic-messages"]) {
-      const result = await run(name, api, { tools: "none", webSearch: "disabled", webFetch: "disabled" });
+      const result = await run(name, api, { tools: "none", webSearch: "disabled", webFetch: "disabled" }, "answer", 4, false, undefined, "max");
       expect(result.code, `${api}: ${result.diagnostic}`).toBe(0);
       expect(result.result).toMatchObject({ finalText: "The answer is 42." });
       expect(result.requests.length).toBeGreaterThan(0);
@@ -76,9 +89,12 @@ for (const name of names) {
         expect(request.model).toBe("fixture-model");
         expect(request.tools ?? []).toHaveLength(0);
         expect(request.max_tokens ?? request.max_completion_tokens ?? request.max_output_tokens).toBe(70000);
-        expect(request).toMatchObject(api === "openai-completions" ? { reasoning_effort: "low" }
-          : api === "openai-responses" ? { reasoning: { effort: "low" } } : { output_config: { effort: "low" } });
       }
+      const main = result.requests[0];
+      const effort = api === "openai-completions" ? main?.reasoning_effort
+        : api === "openai-responses" ? (main?.reasoning as { effort?: string })?.effort
+        : (main?.output_config as { effort?: string })?.effort;
+      expect(effort).toBe("max");
       expect(JSON.stringify(result.requests)).toMatch(/image_url|input_image|"type":"image"/u);
       expect(result.stdout).not.toContain("fixture-upstream-secret");
       expect(result.result.usage.inputTokens).toBeGreaterThan(0);

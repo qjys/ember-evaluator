@@ -71,12 +71,6 @@ def install_output_capture() -> None:
 def main() -> None:
     root = Path(sys.argv.pop(1)).resolve()
     sys.path.insert(0, str(root))
-    if os.environ.get("EVALUATOR_REASONING_EFFORT"):
-        from reasoning_effort import install_openai_reasoning_effort
-
-        install_openai_reasoning_effort(
-            os.environ["EVALUATOR_REASONING_EFFORT"], os.environ["EVALUATOR_REASONING_MODEL"]
-        )
     install_output_capture()
     if os.environ.get("EVALUATOR_HERMES_MEDIA") == "1":
         import run_agent

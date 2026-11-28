@@ -54,6 +54,53 @@ ARSI-Evaluator covers three types of evaluation. See the [benchmark list](docs/u
 | Inference engine performance | AgentX, AISBench | Replay agent request traces and load-test model services to measure throughput, latency, and prefix cache metrics. [AgentX guide](docs/users/benchmarks/agentx.md) · [AISBench guide (Chinese)](plugins/aisbench/README.md) |
 | Kernel performance | kernel | Verify kernel correctness and measure execution time and speedup. [Kernel evaluation guide](docs/users/benchmarks/kernel-npu.md) |
 
+## 📊 Evaluation Results
+
+### OfficeQA Pro V2
+
+<table width="100%">
+  <thead>
+    <tr>
+      <th scope="col" width="50%">Different models with their own agents</th>
+      <th scope="col" width="50%">Same model with different solvers</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td align="center" valign="middle">
+        <a href="docs/experiment/officeqa-pro-v2/accuracy-by-model.png">
+          <img src="docs/experiment/officeqa-pro-v2/accuracy-by-model.png" alt="OfficeQA Pro V2 model accuracy. deepseek-v4.1-flash-1017 64.44%, hy4-flash 56.67%, MiniMax-M3.1-Flash 53.33%, qwen3.8-flash 51.11%, glm-5.3-flash 47.78%" width="100%">
+        </a>
+      </td>
+      <td align="center" valign="middle">
+        <a href="docs/experiment/officeqa-pro-v2/deepseek-v4.1-flash-1017/accuracy.en.png">
+          <img src="docs/experiment/officeqa-pro-v2/deepseek-v4.1-flash-1017/accuracy.en.png" alt="OfficeQA Pro V2 accuracy across eleven solvers, ranging from 53.33% to 64.44%" width="100%">
+        </a>
+      </td>
+    </tr>
+  </tbody>
+  <tbody>
+    <tr>
+      <th scope="col" width="50%">Reported token usage</th>
+      <th scope="col" width="50%">Solve time</th>
+    </tr>
+    <tr>
+      <td align="center" valign="middle">
+        <a href="docs/experiment/officeqa-pro-v2/deepseek-v4.1-flash-1017/token-usage.en.png">
+          <img src="docs/experiment/officeqa-pro-v2/deepseek-v4.1-flash-1017/token-usage.en.png" alt="Median and 90th percentile of reported tokens per question for 11 solvers, with reporting coverage" width="100%">
+        </a>
+      </td>
+      <td align="center" valign="middle">
+        <a href="docs/experiment/officeqa-pro-v2/deepseek-v4.1-flash-1017/solve-time.en.png">
+          <img src="docs/experiment/officeqa-pro-v2/deepseek-v4.1-flash-1017/solve-time.en.png" alt="Median and 90th percentile solve times for 11 solvers, with the number of questions included" width="100%">
+        </a>
+      </td>
+    </tr>
+  </tbody>
+</table>
+
+See the [experiment archive](docs/experiment/README.md#officeqa-pro-v2) for full scores, run settings, and original run reports, and the [MiniMax Code per-question snapshot](docs/experiment/officeqa-pro-v2/minimax-m3.1-flash/minimax-code-snapshot.json) to reproduce its accuracy and percentiles.
+
 ## 📦 Installation
 
 ### Install with a Coding Agent
@@ -140,19 +187,6 @@ Tracer starts the local Collector on demand. On the machine running the Collecto
 ![Tracer waterfall showing the timing of model calls and tool events](imgs/tracer-trajectory.png)
 
 *Tracer trajectory analysis view. See the [Tracer guide](docs/users/tracer.md) for configuration and troubleshooting.*
-
-## 📊 Evaluation Results
-
-These runs used **DeepSeek V4.1 Flash 1017**. `tbd` marks a pending evaluation. Scores follow each benchmark’s rules.
-
-| Benchmark | Agent Harness | Result |
-| --- | --- | --- |
-| GSM8K | SimpleAgent | 92.34% (1,218 / 1,319) |
-| MMLU | choice-logprobs | 88.83% (12,474 / 14,042) |
-| WorkBuddy | SimpleAgent | Office 0.8502 · Code 0.9009 · Web 0.7957 |
-| Terminal-Bench 4.0 | SimpleAgent | `tbd` |
-| SWE-bench Verified | SimpleAgent | `tbd` |
-| OfficeQA Pro V2 | SimpleAgent | 56.67% (51 / 90) |
 
 ## 📖 Guides
 

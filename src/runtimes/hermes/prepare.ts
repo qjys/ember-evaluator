@@ -36,8 +36,7 @@ function mergeHermesModelConfig(existing: string, model: ModelConfig, root: stri
     let name = "evaluator-search";
     while (Object.hasOwn(servers, name) && (servers[name] as { args?: unknown[] } | null)?.args?.[0] !== root) name += "-fallback";
     doc.mcp_servers = { ...servers, [name]: { command: node,
-      args: [root, "--serve", model.api, model.endpoint, model.name, HERMES_AUTH_ENV],
-      env: { [HERMES_AUTH_ENV]: "${ARSI_EVALUATOR_API_KEY}" } } };
+      args: [root, "--serve", JSON.stringify({ fetch: true })] } };
   }
   const additions = parseYaml(hermesModelSettings(model)) as Record<string, unknown>;
   if (model.inputModalities?.includes("image")) {
@@ -209,10 +208,6 @@ export async function prepareHermes(
               HERMES_YOLO_MODE: "1",
               OFFICE_AGENT_WORKDIR: path(state, "work", "office-agent"),
               [HERMES_AUTH_ENV]: preparation.auth.value,
-              ...(preparation.model.reasoningEffort === undefined ? {} : {
-                EVALUATOR_REASONING_EFFORT: preparation.model.reasoningEffort,
-                EVALUATOR_REASONING_MODEL: preparation.model.name,
-              }),
               ...(media.length ? { EVALUATOR_HERMES_MEDIA: "1" } : {}),
             },
             inheritEnv: false,

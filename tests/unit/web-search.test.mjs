@@ -2,11 +2,10 @@ import { afterEach, expect, test, vi } from "vitest";
 import { createServer } from "node:http";
 import { text } from "node:stream/consumers";
 import { startModelRelay } from "../../src/runtimes/shared/assets/model-relay.mjs";
-import { searchWeb } from "../../src/infrastructure/network/web-search.mjs";
-import { nativeSearchFallback, taskServers } from "../../src/runtimes/shared/assets/task-resources.mjs";
-import { fetchWebPage } from "../../src/runtimes/codex/assets/web-fetch.mjs";
+import { fetchWeb, searchWeb } from "../../src/infrastructure/network/web-search.mjs";
+import { nativeWebFallback, taskServers } from "../../src/runtimes/shared/assets/task-resources.mjs";
+import { fetchWebPage } from "../../src/infrastructure/network/web-fetch.mjs";
 
-const service = { baseUrl: "https://gateway.example/v1", model: "selected", apiKey: "fixture" };
 const signal = new AbortController().signal;
 const source = { title: "Source", url: "https://docs.example.org/page" };
 afterEach(() => vi.unstubAllGlobals());
@@ -36,68 +35,51 @@ test("Codex fetch rejects private URLs and out-of-scope domains before connectin
   await expect(fetchWebPage("https://example.org", ["*.example.org"], signal)).rejects.toThrow(/allowlist/u);
 });
 
-test("search-only Codex never tries the provider when Exa fails", async () => {
-  const fetch = vi.fn().mockResolvedValue(new Response(null, { status: 503 }));
-  vi.stubGlobal("fetch", fetch);
-  await expect(searchWeb("query", { ...service, exaOnly: true }, signal)).rejects.toThrow(/exa: HTTP 503/u);
-  expect(fetch).toHaveBeenCalledTimes(1);
-});
+const exaReply = () => Response.json({ result: { content: [{ type: "text", text: "Title: Source\nURL: " + source.url }] } });
 
-test("Exa returns source URLs without sending the model credential to Exa", async () => {
-  const fetch = vi.fn(async () => Response.json({ result: { content: [{ text: "Title: Source\nURL: " + source.url }] } }));
+test("direct supplementary search uses public Exa without model credentials", async () => {
+  const fetch = vi.fn(exaReply);
   vi.stubGlobal("fetch", fetch);
-  expect(await searchWeb("query", service, signal)).toMatchObject({ backend: "exa", results: [source], failures: [] });
+  expect(await searchWeb("query", signal)).toMatchObject({ backend: "exa", results: [source] });
   expect(fetch).toHaveBeenCalledTimes(1);
+  expect(fetch.mock.calls[0][0]).toBe("https://mcp.exa.ai/mcp?tools=web_search_exa");
   expect(fetch.mock.calls[0][1].headers).not.toHaveProperty("authorization");
 });
 
-test.each([
-  ["openai-completions", "/chat/completions", { choices: [{ message: { annotations: [{ type: "url_citation", url_citation: source }] } }] }],
-  ["openai-responses", "/responses", { output: [{ type: "web_search_call", action: { sources: [source] } }] }],
-  ["anthropic-messages", "/messages", { content: [{ type: "web_search_tool_result", content: [{ type: "web_search_result", ...source }] }] }],
-])("failed Exa searches use the current %s model route", async (api, path, payload) => {
-  const fetch = vi.fn().mockResolvedValueOnce(new Response(null, { status: 429 })).mockResolvedValueOnce(Response.json(payload));
-  vi.stubGlobal("fetch", fetch);
-  expect(await searchWeb("query", { ...service, api }, signal)).toMatchObject({
-    backend: "model-service", results: [source], failures: ["exa: HTTP 429"],
-  });
-  expect(fetch.mock.calls[1][0]).toBe(service.baseUrl + path);
-  expect(JSON.parse(fetch.mock.calls[1][1].body).model).toBe(service.model);
-});
-
-test("Ark Responses requests accept citations without an unsupported sources include", async () => {
+test("reads the matching Exa result from a streaming MCP response", async () => {
   const fetch = vi.fn(async (_url, options) => {
-    const body = JSON.parse(options.body);
-    expect(body.tools).toEqual([{ type: "web_search", sources: ["doubao"] }]);
-    expect(body).not.toHaveProperty("include");
-    return Response.json({ output: [
-      { type: "web_search_call", action: { type: "search" } },
-      { type: "message", content: [{ type: "output_text", annotations: [{ type: "url_citation", ...source }] }] },
-    ] });
+    const request = JSON.parse(options.body);
+    expect(request.params).toEqual({ name: "web_search_exa", arguments: { query: "query", objective: "query", numResults: 5 } });
+    const event = JSON.stringify({ jsonrpc: "2.0", id: request.id, result: { content: [{ type: "text", text: "Title: Source\nURL: " + source.url }] } });
+    return new Response("data: {\"method\":\"notifications/progress\"}\n\ndata: " + event + "\n\n", {
+      headers: { "content-type": "text/event-stream" },
+    });
   });
   vi.stubGlobal("fetch", fetch);
-  expect(await searchWeb("query", { ...service, api: "openai-responses" }, signal, true))
-    .toMatchObject({ backend: "model-service", results: [source] });
-});
-
-test("OpenCode skips a second Exa attempt and rejects model text without citations", async () => {
-  const fetch = vi.fn(async () => Response.json({ choices: [{ message: { content: source.url } }] }));
-  vi.stubGlobal("fetch", fetch);
-  await expect(searchWeb("query", { ...service, api: "openai-completions" }, signal, true)).rejects.toThrow(/no search sources/u);
+  expect(await searchWeb("query", signal)).toMatchObject({ backend: "exa", results: [source] });
   expect(fetch).toHaveBeenCalledTimes(1);
-  expect(fetch.mock.calls[0][0]).toContain(service.baseUrl);
 });
 
-test.each([
-  [404, "ToolNotOpen", "provider web search is not activated or authorized"],
-  [403, "Access denied for web search", "provider web search is not activated or authorized"],
-  [400, "There are no healthy deployments for this model", "the selected model has no available search route"],
-])("reports the LiteLLM reason without exposing upstream diagnostics", async (status, message, reason) => {
-  vi.stubGlobal("fetch", async () => Response.json({
-    error: { message: "LiteLLM: " + JSON.stringify({ error: { message, credential: "private-value" } }) },
-  }, { status }));
-  await expect(searchWeb("query", { ...service, api: "openai-responses" }, signal, true))
-    .rejects.toEqual(Error("model-service: HTTP " + status + ": " + reason));
+test("reports Exa HTTP failure without returning its response body", async () => {
+  const fetch = vi.fn(async () => Response.json({ error: "private-value" }, { status: 503 }));
+  vi.stubGlobal("fetch", fetch);
+  await expect(searchWeb("query", signal)).rejects.toThrow(/^Exa returned HTTP 503$/u);
+  expect(fetch).toHaveBeenCalledTimes(1);
+});
+
+test("supplementary fetch calls Exa directly for a public URL, with no external fallback for blocked domains", async () => {
+  const fetch = vi.fn(async (url, options) => {
+    expect(url).toBe("https://mcp.exa.ai/mcp?tools=web_fetch_exa");
+    expect(options.headers).not.toHaveProperty("authorization");
+    expect(JSON.parse(options.body).params).toEqual({ name: "web_fetch_exa", arguments: { urls: ["https://example.org/"] } });
+    return Response.json({ result: { content: [{ type: "text", text: "Fetched page text" }] } });
+  });
+  vi.stubGlobal("fetch", fetch);
+  await expect(fetchWeb("https://example.org", ["other.example.org"], signal)).rejects.toThrow(/allowlist/u);
+  await expect(fetchWeb("http://127.0.0.1/", undefined, signal)).rejects.toThrow(/public HTTP/u);
+  expect(fetch).not.toHaveBeenCalled();
+  expect(await fetchWeb("https://example.org", undefined, signal)).toMatchObject({ backend: "exa", body: "Fetched page text" });
+  expect(fetch).toHaveBeenCalledTimes(1);
 });
 
 test("project and task MCP names are both reserved for supplementary search", async () => {
@@ -119,7 +101,7 @@ test("restricted attempts never start the supplementary MCP search server", asyn
 });
 
 test("native search runs first and its empty result receives one supplementary result across retries", async () => {
-  const complete = nativeSearchFallback("http://localhost/fixture", "evaluator-search");
+  const complete = nativeWebFallback("http://localhost/fixture", "evaluator-search");
   const fetch = vi.fn(async () => Response.json({ result: { content: [{ text: JSON.stringify({ backend: "exa", results: [source] }) }] } }));
   vi.stubGlobal("fetch", fetch);
   const request = { tools: ["websearch", "evaluator-search_web_search", "read"].map(name => ({ function: { name } })),
@@ -147,7 +129,7 @@ test.each([
 ])("supplements paired tool results across API protocols", async request => {
   const fetch = vi.fn(async () => Response.json({ result: { content: [{ text: JSON.stringify({ backend: "exa", results: [source] }) }] } }));
   vi.stubGlobal("fetch", fetch);
-  await nativeSearchFallback("http://localhost/fixture", "evaluator-search")(request, signal);
+  await nativeWebFallback("http://localhost/fixture", "evaluator-search")(request, signal);
   expect(JSON.stringify(request)).toContain(source.url);
   expect(fetch).toHaveBeenCalledTimes(1);
 });
@@ -177,7 +159,7 @@ test.each([false, true])("Responses continuation falls back using the model-emit
   await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
   const base = "http://127.0.0.1:" + server.address().port;
   const relay = await startModelRelay({ api: "openai-responses", baseUrl: base, apiKey: "fixture", token: "test",
-    completeSearch: nativeSearchFallback(base + "/search", "evaluator-search") });
+    completeWebTools: nativeWebFallback(base + "/search", "evaluator-search") });
   try {
     const post = async payload => {
       const reply = await fetch(relay.endpoint + "/responses", { method: "POST", headers: { authorization: "Bearer test" },
@@ -207,6 +189,52 @@ test("per-query domain restrictions never reach an unrestricted fallback", async
   const payload = { messages: [{ role: "assistant", tool_calls: [{ id: "a", function: { name: "WebSearch",
     arguments: JSON.stringify({ query: "docs", allowed_domains: ["docs.example.org"] }) } }] },
     { role: "tool", tool_call_id: "a", content: "No results" }] };
-  await nativeSearchFallback("http://localhost/fixture", "evaluator-search")(payload, signal);
+  await nativeWebFallback("http://localhost/fixture", "evaluator-search")(payload, signal);
   expect(fetch).not.toHaveBeenCalled();
+});
+
+test("native fetch wins, and a failed call gets only the corresponding supplemental result", async () => {
+  const complete = nativeWebFallback("http://localhost/fixture", "evaluator-search", undefined, "native", true, false);
+  const fetch = vi.fn(async (_url, options) => {
+    expect(JSON.parse(options.body).params).toEqual({ name: "web_fetch", arguments: { url: source.url } });
+    return Response.json({ result: { content: [{ text: JSON.stringify({ backend: "exa", body: "fixture body" }) }] } });
+  });
+  vi.stubGlobal("fetch", fetch);
+  const request = {
+    tools: ["WebFetch", "evaluator-search_web_fetch"].map(name => ({ name })),
+    messages: [{ role: "assistant", content: [
+      { type: "tool_use", name: "WebFetch", id: "success", input: { url: source.url } },
+      { type: "tool_use", name: "WebFetch", id: "failure", input: { url: source.url } },
+    ] }, { role: "user", content: [
+      { type: "tool_result", tool_use_id: "success", content: "native body" },
+      { type: "tool_result", tool_use_id: "failure", content: "HTTP 403 Forbidden" },
+    ] }],
+  };
+  await complete(request, signal);
+  expect(request.tools).toEqual([{ name: "WebFetch" }]);
+  expect(request.messages[1].content[0].content).toBe("native body");
+  expect(request.messages[1].content[1].content).toContain("fixture body");
+  expect(fetch).toHaveBeenCalledTimes(1);
+});
+
+test.each([true, false])("Qwen deferred WebFetch respects fetch policy and pairs results by outer call ID (enabled=%s)", async enabled => {
+  const fetch = vi.fn(async () => Response.json({ result: { content: [{ text: "supplementary page" }] } }));
+  vi.stubGlobal("fetch", fetch);
+  const complete = nativeWebFallback("http://localhost/fixture", "evaluator-search", undefined, "native", enabled);
+  const toolCall = (id, name, args) => ({ id, function: { name: "tool_call", arguments: JSON.stringify({ name, arguments: args }) } });
+  const calls = [
+    toolCall("failed", "web_fetch", { url: source.url, prompt: "Extract the heading." }),
+    toolCall("ok", "web_fetch", { url: "https://example.org/other" }),
+    toolCall("unrelated", "read_file", { url: source.url }),
+  ];
+  const results = [
+    { role: "tool", tool_call_id: "ok", content: "native page" },
+    { role: "tool", tool_call_id: "unrelated", content: "Error: file unavailable" },
+    { role: "tool", tool_call_id: "failed", content: "HTTP 403 Forbidden" },
+  ];
+  await complete({ messages: [{ role: "assistant", tool_calls: calls }, ...results] }, signal);
+  expect(results.map(result => result.content)).toEqual(["native page", "Error: file unavailable",
+    enabled ? "HTTP 403 Forbidden\nSupplementary web fetch: supplementary page" : "HTTP 403 Forbidden"]);
+  expect(fetch).toHaveBeenCalledTimes(enabled ? 1 : 0);
+  if (enabled) expect(JSON.parse(fetch.mock.calls[0][1].body).params).toEqual({ name: "web_fetch", arguments: { url: source.url } });
 });

@@ -1,3 +1,4 @@
+import { normalizeAllowedHosts } from "../../core/policies/network-policy.js";
 import { resolveModelInput } from "../multimodal/model.js";
 import { loadAttachments, requireInputModalities } from "../multimodal/input.js";
 import { consumePiRunner } from "../pi/process.js";
@@ -147,7 +148,10 @@ export async function prepareDsh(
       await session.upload(permissions, patch, context.signal);
     }
     const overlays = [modelOverlay, patch];
-    const fallback = candidate.harness.actualVersion === DSH_VERSION && tools !== "none" && webSearch !== "disabled";
+    const fallbackFetch = webFetch !== "disabled" && policy.mcp !== "disabled";
+    const fallback = candidate.harness.actualVersion === DSH_VERSION && tools !== "none" &&
+      (webSearch !== "disabled" || fallbackFetch);
+    const network = session.solveNetwork;
     if (restricted || fallback) {
       const policyPatch = path(state, "tools.patch.yaml");
       const rows: Record<string, unknown>[] = restricted ? [
@@ -155,7 +159,8 @@ export async function prepareDsh(
       ] : [];
       if (fallback) {
         rows.push({ insert: [{ id: "evaluator-search", name: path(runtime.root, "runtimes", "dsh", "assets", "search.mjs"),
-          config: { api: preparation.model.api, baseUrl: mapping?.baseUrl ?? preparation.model.endpoint, model: preparation.model.name } }] });
+          config: { search: webSearch !== "disabled", fetch: fallbackFetch,
+            ...(typeof network === "object" ? { allowedHosts: normalizeAllowedHosts(network.allowedHosts) } : {}) } }] });
       }
       if (tools === "none") rows.unshift({ id: "tool-executor-native", disabled: false }, { id: "tool-executor-ptc", disabled: true });
       if (restricted) {

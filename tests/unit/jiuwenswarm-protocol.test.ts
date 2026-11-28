@@ -114,6 +114,31 @@ test("preserves native tool diagnostics in order and coalesces streaming text", 
   expect(validateSequence(trajectory)).toEqual({ complete: true, missing: [] });
 });
 
+test("records redacted thinking in order with tool calls and assistant text", async () => {
+  const value = await context("thinking");
+  const stdout = envelope(true, [
+    event("chat.delta", { content: "I will check. " }),
+    event("chat.reasoning", { content: "Use " }),
+    event("context.usage", {}),
+    event("chat.reasoning", { content: "secret-" }),
+    event("chat.reasoning", { content: "key" }),
+    event("chat.tool_call", { name: "bash", tool_call_id: "c1", arguments: { command: "pwd" } }),
+    event("chat.tool_result", { tool_name: "bash", tool_call_id: "c1", result: "/workspace", success: true }),
+    event("chat.reasoning", { content: "The tool succeeded." }),
+    event("chat.delta", { content: "Done" }),
+    event("chat.final", { content: "Done" }),
+  ]);
+  const result = await consumeJiuwenswarm(processHandle({ stdout }).handle, value, "secret-key");
+  expect(result.finalText).toBe("I will check. Done");
+  const trajectory = (await readFile(join(value.paths.agent, "trajectory.jsonl"), "utf8"))
+    .trimEnd().split("\n").map(line => JSON.parse(line) as TrajectoryEvent);
+  expect(trajectory.map(event => event.type))
+    .toEqual(["start", "text", "thinking", "tool_call", "tool_result", "thinking", "text", "usage", "end"]);
+  expect(trajectory.filter(event => event.type === "thinking").map(event => event.data))
+    .toEqual([{ text: "Use [redacted]" }, { text: "The tool succeeded." }]);
+  expect(validateSequence(trajectory)).toEqual({ complete: true, missing: [] });
+});
+
 test("redacts nested tool arguments, results and identifiers before writing diagnostics", async () => {
   const value = await context("redact-tools");
   const secret = 'credential/with+"quote';

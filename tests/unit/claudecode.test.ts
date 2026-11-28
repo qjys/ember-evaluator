@@ -53,6 +53,13 @@ test.each([
   [chunks(jsonl({ type: "assistant" })), 0, "SOLVER_RESULT_INCOMPLETE"],
   [chunks(jsonl({ type: "assistant" }), Buffer.from('{"type":')), 0, "SOLVER_PROTOCOL_INVALID"],
   [chunks(jsonl(resultEvent, resultEvent)), 0, "SOLVER_PROTOCOL_INVALID"],
+  [chunks(jsonl({ ...resultEvent, result_index: 0 }, { ...resultEvent, result_index: 0 })), 0, "SOLVER_PROTOCOL_INVALID"],
+  [chunks(jsonl({ ...resultEvent, result_index: 0 }, { type: "result", result_index: 1,
+    subtype: "error_during_execution", is_error: true, api_error_status: 401 })), 0, "MODEL_AUTH_FAILED"],
+  [chunks(jsonl({ type: "result", result_index: 0, subtype: "error_max_turns", is_error: false },
+    { ...resultEvent, result_index: 1 })), 0, "SOLVER_RESULT_INCOMPLETE"],
+  [chunks(jsonl({ type: "result", result_index: 0, subtype: "error_during_execution", is_error: true, api_error_status: 401 },
+    { ...resultEvent, result_index: 1 })), 0, "MODEL_AUTH_FAILED"],
 ] as const)("Claude Code preserves evidence on failure (%#)", async (stdout, code, expected) => {
   const context = await attempt();
   const handle = processWith(stdout, code);
@@ -61,6 +68,23 @@ test.each([
   const trajectory = await readFile(join(context.paths.agent, "trajectory.jsonl"), "utf8");
   expect(trajectory).toContain('"type":"error"');
   expect(trajectory).not.toContain('"type":"end"');
+});
+
+test("Claude Code returns the last completed turn and sums each result's usage", async () => {
+  const context = await attempt();
+  const handle = processWith(chunks(jsonl(
+    { ...resultEvent, result_index: 0, result: "I'll check the tool output." },
+    { type: "assistant" },
+    { ...resultEvent, result_index: 1, result: "Final answer",
+      usage: { input_tokens: 30, cache_read_input_tokens: 4, output_tokens: 11 } },
+  )));
+  expect(await consumeClaudeCode(handle, context, secret)).toEqual({
+    finalText: "Final answer", usage: { inputTokens: 51, outputTokens: 18, totalTokens: 69 },
+  });
+  expect(handle.stop).not.toHaveBeenCalled();
+  const events = (await readFile(join(context.paths.agent, "session.jsonl"), "utf8")).trim().split("\n")
+    .map(line => JSON.parse(line).result_index);
+  expect(events).toEqual([0, undefined, 1]);
 });
 
 test("Claude Code rejects a requested web tool missing from the native inventory", async () => {

@@ -142,13 +142,11 @@ services:
     reasoningEffort: max
 ```
 
-可选值为 `minimal`、`low`、`medium`、`high`、`xhigh`、`max`。显式配置后，每轮请求采用该档位，覆盖 Agent 或 Bundle 的默认档位。省略字段时保留 Agent 和模型服务原有默认行为。所选模型服务需要支持该档位，服务拒绝时保留错误信息，档位不会自动降低。Messages 不接受 `minimal`。
+可选值为 `minimal`、`low`、`medium`、`high`、`xhigh`、`max`。显式配置时，由所选 Harness 设置主 Agent 的思考档位，并按自身规则决定支持哪些档位、以什么格式发送，以及辅助请求是否继承。省略字段时沿用 Agent 和模型服务的默认行为。指定的档位会保存到解析配置、导出配置和续跑指纹中。
 
-SimpleAgent 和 Pi 在模型请求 hook 中设置档位。DSH 在模型 patch 中选择档位并声明对应的实际请求值。JiuwenSwarm 替换安装配置中的模型请求默认值，并在 SDK 请求中再次应用。Codex 使用原生 `model_reasoning_effort`。Claude Code 和 CodeBuddy 同时使用原生 `--effort` 和已有模型代理。ZCode 使用已有模型代理。TRAE 的 Chat Completions 使用原生配置，Responses 和 Messages 使用模型代理。
+SimpleAgent 和 Pi 设置会话的 `thinkingLevel`。JiuwenSwarm 在选中的模型配置上设置 `reasoning_level`。Hermes 使用原生 `--reasoning`。DeepAgents 将 `reasoning_effort` 交给支持该参数的 `build_agent_for_run` 工厂，工厂可以为主图和子 Agent 分别构建模型实例。各 CLI 的原生入口和协议限制见 [Solver 配置指南](solvers.zh-CN.md)。
 
-Chat Completions 发送 `reasoning_effort`，Responses 发送 `reasoning.effort`，Messages 发送 `output_config.effort` 并启用 adaptive thinking。输出格式、思考摘要等其他请求字段继续保留。指定的档位会保存到解析配置、导出配置和续跑指纹中。Judge 采用其自身选择的 Service 档位。
-
-DeepAgents 和 Hermes 会对所选模型的同步、异步 SDK 请求设置 Chat Completions 档位，Hermes 同时接收原生 `--reasoning`。AgentX 在额外请求参数中保存档位，并在各 worker 组装完请求后再次应用，覆盖原始轨迹里不同的档位。Dify 的工作流发布功能需要单独实现，当前遇到显式 Service 覆盖会报配置错误。
+Judge 采用自身选择的 Service 档位。AgentX 在回放 worker 组装请求时应用配置的档位，可覆盖原始轨迹中的值。Dify 的工作流发布功能需要单独实现，当前遇到显式 Service 覆盖会报配置错误。
 
 使用 LiteLLM 等会转换协议的服务时，还需要核对网关实际发送给上游的请求。网关负责将 Service 协议转换为模型厂商协议。
 

@@ -22,18 +22,18 @@ Benchmark 决定任务和评分，Solver 决定模型请求或 Agent 怎样执�
 | --- | --- | --- | --- | --- | --- | --- |
 | Codex | 支持 | 原生或补充 MCP | 独立抓取用 MCP | 支持 | 支持 | 支持 |
 | TRAE | 支持 | 原生或补充 MCP | 支持 | 支持 | 支持 | 支持 |
-| Claude Code | 支持 | Hook / Exa | 支持 | 支持 | 支持 | 支持 |
+| Claude Code | 支持 | 原生 / 补充工具 | 支持 | 支持 | 支持 | 支持 |
 | CodeBuddy | 支持 | 原生或补充 MCP | 支持 | 支持 | 支持 | 支持 |
 | Qwen Code | 支持 | 原生或补充 MCP | 支持 | 支持 | 支持 | 支持 |
 | Kimi Code | 支持 | 原生或补充 MCP | 支持 | 支持 | 支持 | 支持 |
 | MiniMax Code | 支持 | 原生或补充 MCP | 支持 | 支持 | 支持 | 支持 |
 | ZCode | 支持 | 补充 MCP | 支持 | 支持 | 支持 | 支持 |
 | OpenCode | 支持 | 原生 Exa | 支持 | 支持 | 支持 | 支持 |
-| SimpleAgent（无 Bundle） | 支持 | Pi / Exa | 原生无 | 原生无 | 支持 | 支持 |
-| DSH (Bundle) | 支持 | DSH / Exa | 支持 | 支持 | 支持 | 支持 |
-| Pi (Bundle) | 支持 | Pi / Exa | Bundle 提供 | Bundle 提供 | 支持 | 支持 |
+| SimpleAgent（无 Bundle） | 支持 | Pi / 补充工具 | 显式开启时提供直连抓取 | 原生无 | 支持 | 支持 |
+| DSH (Bundle) | 支持 | 原生 / 补充工具 | 支持 | 支持 | 支持 | 支持 |
+| Pi (Bundle) | 支持 | Pi / 补充工具 | 显式开启使用直连抓取 | Bundle 提供 | 支持 | 支持 |
 | JiuwenSwarm (Bundle) | 支持 | 原生或补充 MCP | 按 Bundle 缺省 | 支持 | 支持 | 支持 |
-| DeepAgents (Bundle) | 支持 | 评测器 / Exa | Bundle 提供 | 支持 | 支持 | 支持 |
+| DeepAgents (Bundle) | 支持 | 评测器补充工具 | Bundle 或显式开启的补充抓取 | 支持 | 支持 | 支持 |
 
 `tools: none` 可以和 `mcp: disabled` 或任一网页字段的 `disabled` 同用。它与 `webSearch: enabled`、`webFetch: enabled` 分别冲突，因为关闭内置工具也会关闭搜索和抓取。若要使用网页工具，省略 `tools`；若要只保留自行声明的 MCP，省略两个网页字段。
 
@@ -41,11 +41,9 @@ Benchmark 决定任务和评分，Solver 决定模型请求或 Agent 怎样执�
 
 local 中的文件和 Shell 操作使用当前操作系统用户的权限，可以写任务目录之外该用户有权写入的路径。Docker 保留指定的用户、挂载和网络策略。CodeBuddy 为主 Agent 和子 Agent 分别设置免审批。
 
-网络允许时，保留原生搜索。Claude 通过 WebSearch 结果钩子、DSH 通过搜索服务钩子，在原生工具没有来源时自动查询 Exa，再尝试当前模型服务。支持模型函数调用的 CLI 还可在下一次请求中匹配原生调用及其结果，自动用补充 MCP 的结果补全失败的查询。在原生函数和补充工具同时可用时优先原生函数。仅暴露厂商托管搜索、没有可配对工具结果的 CLI 仍由 Harness 或模型选择补充工具。OpenCode 的原生 websearch 使用 Exa，回退时直接查询模型服务。Pi 通过扩展工具搜索，Claude 和 Pi 在单独关闭 MCP 后仍有搜索接入方式。
+网页工具优先使用 Harness 原生入口。若原生工具需要未配置的厂商凭据，Evaluator 支持补充工具的入口可继续求解，用户继续使用原有模型凭据和网页开关。可识别的原生工具调用失败时，Evaluator 在钩子或下一轮工具结果中补充证据。对于由上游执行、且没有可配对客户端结果的托管工具，Harness 或模型可以选择补充工具。
 
-补充搜索成功时记录来源 URL，只有模型正文时记为无来源。断网、`model-api` 和域名白名单任务关闭不能遵守网络范围的搜索方式，包括模型厂商代查。Pi 的自定义网页工具名可在 `config.bundle` 或 `config.pi` 声明。
-
-通过 LiteLLM 调用火山方舟联网搜索时，先确认当前模型名已在代理上部署，并且上游账号已开通该模型的联网搜索服务。用 Responses 请求检查 `web_search_call.action.sources` 或回复中的 `url_citation`。HTTP 200 只能确认请求成功。方舟返回 `ToolNotOpen` 或明确拒绝搜索权限时，attempt 会记录服务未开通或未授权。
+任务允许公开联网时，使用 Exa 的搜索和抓取分别调用公共 MCP 的 `web_search_exa` 和 `web_fetch_exa`，不使用模型 API Key。补充搜索必须返回结构化来源。抓取失败、回退和后端保存在轨迹或网页工具日志中。Pi 和 SimpleAgent 的补充抓取直连目标网站。域名白名单任务的补充抓取也使用直接 HTTP，并逐次校验重定向。详见[网页工具网络规则](network.zh-CN.md#网页工具网络规则)。
 
 准备 Hermes 或 DeepAgents 时，可用 `--network network.yaml` 指定包源和代理。WSL local 使用宿主可达的代理，Docker 的 `build` 与 `runtime` 分别填写容器可达的地址。将本地模型网关的主机名列入 `noProxy`。详见[网络配置](network.zh-CN.md)。
 
@@ -149,7 +147,7 @@ output:
 
 ## SimpleAgent（基于 Pi）
 
-无 Bundle 的 SimpleAgent 有搜索工具，缺省没有网页抓取或委派工具。显式关闭 `webFetch` 或 `subagent` 时，求解进度会提示缺少对应的内置能力，关闭策略仍传给工作目录扩展。`webFetch: enabled` 会在首次模型请求前检查实际工具；如果扩展没有注册 `web_fetch`，该次求解报配置错误。
+无 Bundle 的 SimpleAgent 提供补充搜索。显式设置 `webFetch: enabled` 后，Evaluator 提供按 URL 直接读取网页的工具，无需 Exa 或 MCP，并遵守任务网络策略。设置 `webSearch: disabled` 可以只开启抓取。单独关闭子 Agent 时，求解进度会说明默认没有委派工具。
 
 `simpleagent` 是 Evaluator 内置的 Solver，使用 Pi SDK 执行 Agent 循环、模型请求与工具调用。不配置 Bundle 时，使用 Evaluator 默认的指令和工具即可运行；例如 `benchmark: gsm8k` 会选择默认 SimpleAgent，无需额外准备 Pi Bundle。
 
@@ -189,7 +187,9 @@ benchmark:
 
 ## 使用 Codex
 
-Codex 保留 `exec` 入口。评测器通过进程内的本地 MCP 提供独立的 `web_fetch`，可在关闭搜索时读取网页正文。关闭抓取会同时撤下 Codex 自带的搜索和打开网页组合工具，此时仍开放的搜索只使用 Exa，返回来源 URL。`mcp: disabled` 会停止补充 MCP；此时显式开启独立抓取，或显式要求开启搜索并关闭抓取，都会在启动前报错。`tools: none` 同时移除补充搜索和抓取，自行声明的 MCP 仍按 `mcp` 开关执行。
+服务的 `reasoningEffort` 映射到 Codex 原生的 `model_reasoning_effort`。
+
+Codex 保留 `exec` 入口。评测器通过进程内的本地 MCP 提供独立的 `web_fetch`，可在关闭搜索时读取网页正文。关闭抓取会同时撤下 Codex 自带的搜索和打开网页组合工具，此时由补充工具提供搜索并返回来源 URL。同时设置 `webSearch: enabled`、`webFetch: enabled` 和 `mcp: disabled` 时，只开放原生组合工具。模型服务决定该工具是否能打开网页正文。关闭 MCP 后，显式开启抓取也必须显式开启搜索。显式开启搜索且关闭抓取同样会在启动前报错。`tools: none` 同时移除补充搜索和抓取，自行声明的 MCP 仍按 `mcp` 开关执行。
 
 `codex` 在本机或 Docker 的任务目录运行 Codex CLI。Evaluator 在首次准备时安装固定版本 `0.167.0`，认证来自所选模型服务。将以下配置保存为实验 YAML，设置 `CODEX_MODEL`、`CODEX_ENDPOINT` 和 `CODEX_API_KEY` 后运行。
 
@@ -218,6 +218,8 @@ output:
 
 ## 使用 Claude Code
 
+服务中显式设置的 `reasoningEffort` 通过原生 `--effort` 设置主 Agent 的档位。CLI 根据模型支持的档位解析该选项，并按原生规则为子 Agent 和工具辅助请求选择档位。
+
 当任务网络允许抓取时，Claude Code 默认向主 Agent 和子 Agent 开放原生 WebFetch，并设置 `skipWebFetchPreflight` 跳过 Anthropic 的域名安全名单查询。任务使用 `none`、`model-api` 网络，或配置 `webFetch: disabled`、`tools: none` 时，会移除 WebFetch。
 
 Evaluator 在本机和 Docker 中安装固定版本的 Claude Code `2.1.322`。保存以下实验配置，设置 `CLAUDE_MODEL`、`CLAUDE_ENDPOINT` 和 `CLAUDE_API_KEY` 后运行。
@@ -242,10 +244,10 @@ output:
 ```
 
 - `base_url` 填 API 基址。Claude Code 会在该地址下请求 `/v1/messages`，通过 `x-api-key` 传递认证。Anthropic 原生服务可填 `https://api.anthropic.com`，DeepSeek 兼容服务可填 `https://api.deepseek.com/anthropic`。
-- Claude 启动时关闭自带沙箱。Linux UID 0 使用 `dontAsk` 并自动允许已开放的工具，其他用户使用 `bypassPermissions`。两种模式都遵守显式禁用的工具配置。本机和 Docker 都开放 Bash，命令按宿主机或容器进程的权限执行。Windows 需要安装 Git for Windows。如果 Claude Code 找不到 Git Bash，将 `CLAUDE_CODE_GIT_BASH_PATH` 设置为对应的 `bash.exe` 路径。
+- Claude 启动时关闭自带沙箱。Docker 任务使用 `bypassPermissions`，并沿用容器配置的用户、挂载和网络。在本机以 Linux root 运行时使用 `dontAsk`。两种模式都遵守显式禁用的工具配置。Bash 按宿主机或容器进程的权限执行。Windows 需要安装 Git for Windows。如果 Claude Code 找不到 Git Bash，将 `CLAUDE_CODE_GIT_BASH_PATH` 设置为对应的 `bash.exe` 路径。
 - Linux 运行时通过仅供当前 attempt 使用的本地转发器访问模型，Bash 启动时会清除转发凭据。
 - 图片和 PDF 页图需要在模型服务的 `inputModalities` 声明 `image`。原生 PDF 需要声明 `pdf`，并使用接收 `document` 内容块的 Messages 服务。见[图片与 PDF 评测](multimodal.zh-CN.md)。
-- 服务字段 `maxTokens` 传给 Claude Code 的输出用量设置，`contextWindow` 设置自动压缩阈值，允许 100000 到 1000000 token。此 Solver 不接受 `retry`。事件、轨迹和 stderr 保存在每次 attempt 的 `agent/` 目录。
+- `maxTokens` 同时设置 Claude Code 的输出预算和 Messages API 的 `max_tokens`。`contextWindow` 按服务支持的容量填写 100,000 到 1,000,000 token。设为 1,000,000 时，Evaluator 选择 Claude Code 的 `[1m]` 模式，CLI 在发出请求前会从模型名中去掉该后缀。此 Solver 不接受 `retry`。事件、轨迹和 stderr 保存在每次 attempt 的 `agent/` 目录。
 
 ## 使用 ZCode
 
@@ -279,13 +281,17 @@ output:
 
 `base_url` 使用接口基地址。Chat Completions 或 Responses 通常填写以 `/v1` 结尾的地址。还可设置 `api: openai-responses` 或 `api: anthropic-messages`。此 Solver 不接受服务字段 `retry`。
 
+服务的 `reasoningEffort` 写入 ZCode 原生模型选择中的 `reasoningLevel`。ZCode 根据模型能力解析该档位，并按原生规则为 WebFetch、WebSearch 和后台辅助请求选择档位。
+
 本机和 Docker 都开放 Bash。本机 Bash 具有宿主进程权限，只用于可信任务。Windows 下使用 Bash 工具需要安装 Git Bash。任务需要容器隔离时使用 Docker。
 
 图片和 PDF 页图需要在模型服务的 `inputModalities` 声明 `image`。原生 PDF 需要声明 `pdf`，并使用接收 PDF 的模型服务。每次 attempt 在 `agent/` 下保存脱敏的会话事件、轨迹和 stderr。见[图片与 PDF 评测](multimodal.zh-CN.md)。
 
 ## 使用 TRAE CLI
 
-TRAE 的原生 WebFetch 可独立于 MCP 使用。原生搜索需要可用的认证；`mcp: disabled` 会移除评测器补充的 Exa 搜索服务。
+当前 TRAE 版本通过原生 `model_reasoning_effort` 为 Chat Completions 设置档位。如需显式设置服务的 `reasoningEffort`，请使用 `api: openai-completions`。Responses 和 Messages 可省略该字段。
+
+TRAE 的原生 WebFetch 可独立于 MCP 使用。原生搜索需要可用的认证；`mcp: disabled` 会移除评测器补充的搜索服务。
 
 Evaluator 在 x64 Windows、WSL 和 Linux Docker 中下载并缓存官方 `traecli` 版本 `0.214.1`。首次运行或预热需要访问 TRAE 发布 CDN，预热无需模型密钥。下载代理使用现有的[网络配置](network.zh-CN.md)。
 
@@ -318,6 +324,8 @@ output:
 - 使用图片或 PDF `pages` 附件时，在服务中设置 `inputModalities: [text, image]`。PDF 使用页图模式。每次 attempt 在 `agent/` 下保存脱敏的会话事件、Evaluator 轨迹和 stderr。见[图片与 PDF 评测](multimodal.zh-CN.md)。
 
 ## 使用 CodeBuddy Code
+
+服务中显式设置的 `reasoningEffort` 通过原生 `--effort` 设置主 Agent 的档位。CLI 根据模型支持的档位解析该选项，并按原生规则为子 Agent 和工具辅助请求选择档位。
 
 2.183.0 使用锁定版本补丁，使 `skills: disabled` 同时关闭项目和插件技能。同一插件的 MCP 仍可在 `mcp` 缺省时运行。
 
@@ -398,7 +406,7 @@ run:
 
 `maxTokens` 控制单次回复的输出，`maxTurns` 设置原生步数，`solveTimeoutSeconds` 设置整题时限。Qwen、Kimi、MiniMax 和 OpenCode 的 1 轮与 2 轮对照分别产生 1 次和 2 次主 Agent 请求。省略 Solver 限额时沿用服务配置和 CLI 默认值。MiniMax 自定义模型默认单次输出上限为 16,384 token。Kimi 的原生 Chat 配置不发送输出上限，Evaluator 在模型转发入口补上显式 `maxTokens`。Kimi 和 MiniMax 的未知自定义模型默认使用 200,000 token 上下文，可通过 `contextWindow` 指定服务实际容量。
 
-四者均按所选服务的 `api` 选择协议；服务 `reasoningEffort` 优先于 CLI 默认档位，并在实际模型请求中再次应用，避免被 CLI 的模型名称推断改写。模型 key 只留在转发进程，子 CLI 使用临时本地令牌。Qwen、Kimi、OpenCode 使用原生 ACP 输入图片，MiniMax 使用原生 `exec --file`。OpenCode 三种协议均可传原始 PDF。Qwen 的 Chat Completions 和 Messages 可传原始 PDF，Responses 使用页图。Kimi 的 ACP 会丢弃二进制资源，MiniMax 的 `--file` 对 PDF 只发送路径说明，这两者使用页图。默认将任务提供的技能目录和 MCP 服务传给所选 CLI。
+四者均按所选服务的 `api` 选择协议；显式设置服务 `reasoningEffort` 时，Qwen Code、Kimi Code 和 OpenCode 通过各自的原生会话设置选择档位，MiniMax Code 使用原生 `--effort`。请求格式以及辅助请求是否继承档位均由 CLI 决定。Qwen Code 原生可选的最低档位是 `low`。模型 key 只留在转发进程，子 CLI 使用临时本地令牌。Qwen、Kimi、OpenCode 使用原生 ACP 输入图片，MiniMax 使用原生 `exec --file`。OpenCode 三种协议均可传原始 PDF。Qwen 的 Chat Completions 和 Messages 可传原始 PDF，Responses 使用页图。Kimi 的 ACP 会丢弃二进制资源，MiniMax 的 `--file` 对 PDF 只发送路径说明，这两者使用页图。默认将任务提供的技能目录和 MCP 服务传给所选 CLI。
 
 关闭内置工具时，CLI 模型请求只保留已注册的 MCP 工具声明。评测器也停止自动添加补充搜索，但任务自己声明的搜索 MCP 仍由 `mcp` 控制。任务的网络策略继续生效。
 
@@ -414,10 +422,10 @@ MiniMax 安装时会验证 SQLite 原生模块；如果预编译模块下载失�
 
 | Harness | 配置时需要注意的条件 |
 | --- | --- |
-| DSH | 六项开关针对锁定版 0.2.2-rc.1。显式开启搜索或抓取时，所选 profile 和模型服务须注册对应的 `web_search` 或 `web_fetch`。搜索插件可直接使用 Exa。 |
-| Pi | 抓取和委派由扩展提供。`pi.webSearchTools` 和 `pi.webFetchTools` 可指定工具名；同一工具同时归入两列时，不能要求一项 `enabled` 另一项 `disabled`。若 `mcp: disabled`，显式启用的网页工具必须仍能在当前会话注册。`simpleagent.bundle` 的别名遵循相同规则。 |
+| DSH | 六项开关针对锁定版 0.2.2-rc.1。显式开启搜索或抓取时，所选 profile 和模型服务须注册对应的 `web_search` 或 `web_fetch`。搜索插件可回退到补充搜索。 |
+| Pi | 显式开启抓取时，优先使用 Evaluator 直连的 `web_fetch`，关闭 MCP 也可使用。由 `pi.webFetchTools` 声明的仅抓取工具和常见抓取工具名在此模式下由 Evaluator 的工具取代。省略 `webFetch` 时沿用 Bundle 的工具集。同一工具归入搜索和抓取时，两项开关不能相反。`simpleagent.bundle` 的别名遵循相同规则。 |
 | JiuwenSwarm | 抓取缺省沿用 Bundle 设置，显式启用可装入原生抓取工具。`mcp: disabled` 会关闭补充搜索；同时显式开启搜索时，主会话必须实际暴露原生搜索工具。配置文件中写有工具名本身不足以证明它可用。 |
-| DeepAgents | 内置工具、抓取、委派、MCP 和技能由 `build_agent_for_run` 构建的图控制。仓库维护的示例提供抓取；其他 Bundle 需要自己实现抓取并在构图时报告不支持的设置。评测器注入的搜索工具可在关闭 MCP 后继续使用。 |
+| DeepAgents | 内置工具、抓取、委派、MCP 和技能由 `build_agent_for_run` 构建的图控制。仓库维护的示例提供抓取。显式开启抓取时，评测器也会向图提供补充抓取工具。关闭 MCP 后仍可使用评测器注入的搜索和抓取工具。 |
 
 JiuwenSwarm 关闭内层沙箱和审批。主 Agent 和三个默认子 Agent（`statusline-setup`、`explore_agent`、`plan_agent`）各自通过原生 `skill_tool` 读取任务或 Bundle 提供的技能。启用的 `code_agent` 和 `browser_agent` 也使用各自的读取器。`skills: disabled` 会关闭这些会话的技能发现和读取器，普通文件工具仍按各自的权限执行。网页抓取缺省沿用 Bundle 的工具配置。`webFetch: enabled` 启用原生 `fetch_webpage`，`webFetch: disabled` 会从模型的工具列表移除它，其他工具仍可用。Hermes 使用本地终端并关闭交互审批。DeepAgents 的工具执行由 Bundle 图配置，Dify 由部署的工作流执行。对于能够自行加载工具的图或远端工作流，适配器会拒绝无法落实的限制。
 

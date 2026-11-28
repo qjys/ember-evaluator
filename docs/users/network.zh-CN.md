@@ -44,3 +44,9 @@ arsi-evaluator run experiment.yaml --network playbook/network/archives.yaml
 | ModelScope、镜像源组合、镜像获取方式、缓存和 ID 核验 | [镜像下载](image-downloads.zh-CN.md) |
 | doctor 结果、失败原因和实际下载验证 | [网络诊断](faq/network.zh-CN.md) |
 | Docker daemon、源码安装、toolbox 和 Ray 节点网络 | [部署网络配置](deployment/network.zh-CN.md) |
+
+## 网页工具网络规则
+
+通过 Solver 的 `webSearch` 和 `webFetch` 开关控制网页工具。允许公开联网时，有原生入口的 Solver 优先使用原生工具。可识别的原生调用失败时，补充工具直接调用公共 Exa MCP。Exa 请求不使用用户的模型 API Key。Pi 和 SimpleAgent 使用 Evaluator 补充抓取时会直连目标网站，包括允许公开联网的任务。有原生抓取工具的 Harness 设置 `mcp: disabled` 后只使用原生抓取。
+
+`none` 和 `model-api` 环境关闭补充网页工具。使用域名白名单时，补充抓取使用直接 HTTP 并校验每次重定向，补充搜索关闭。

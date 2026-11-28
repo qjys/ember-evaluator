@@ -38,6 +38,9 @@ test("native launchers reject modes unavailable on their locked headless paths",
   expect(() => parseCodexConfig({ tools: false })).toThrow(/tools must be default or none/u);
   expect(parseCodexConfig({ webSearch: "enabled", webFetch: "disabled" })).toEqual({ webSearch: "enabled", webFetch: "disabled" });
   expect(parseCodexConfig({ webSearch: "disabled", webFetch: "enabled" })).toEqual({ webSearch: "disabled", webFetch: "enabled" });
+  expect(parseCodexConfig({ webSearch: "enabled", webFetch: "enabled", mcp: "disabled" }))
+    .toEqual({ webSearch: "enabled", webFetch: "enabled", mcp: "disabled" });
+  expect(() => parseCodexConfig({ webSearch: "disabled", webFetch: "enabled", mcp: "disabled" })).toThrow(/Independent fetching requires the evaluator MCP/u);
   expect(() => parseCodexConfig({ webFetch: "enabled", mcp: "disabled" })).toThrow(/webFetch: enabled.*mcp: disabled.*evaluator MCP/u);
   expect(() => parseCodexConfig({ webSearch: "enabled", webFetch: "disabled", mcp: "disabled" })).toThrow(/webSearch: enabled.*webFetch: disabled.*mcp: disabled.*combined search/u);
   expect(parseCodexConfig({ webSearch: "enabled" })).toEqual({ webSearch: "enabled" });

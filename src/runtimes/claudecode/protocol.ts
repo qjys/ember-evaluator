@@ -23,6 +23,8 @@ export function consumeClaudeCode(
   handle: ProcessHandle, context: AttemptContext, secret: string, requiredWebTools: readonly string[] = [],
 ): Promise<SolveResult> {
   let result: CliEvent | undefined;
+  let firstFailedResult: CliEvent | undefined;
+  const turnUsages: Usage[] = [];
   return consumeCliJsonl(handle, context, [secret], {
     solver: "claudecode",
     label: "Claude Code",
@@ -40,26 +42,47 @@ export function consumeClaudeCode(
         }
       }
       if (event.type !== "result") return;
-      if (result) throw new EvaluatorError("SOLVER_PROTOCOL_INVALID", "Claude Code emitted multiple result events");
+      if (result) {
+        const previousIndex = tokenCount(result.result_index);
+        const index = tokenCount(event.result_index);
+        if (previousIndex === null || index !== previousIndex + 1) {
+          throw new EvaluatorError("SOLVER_PROTOCOL_INVALID", "Claude Code emitted duplicate or out-of-order result events");
+        }
+      }
+      // The CLI can complete queued turns after its initial result. Each
+      // indexed result accounts for work since the previous result.
       result = event;
+      if (event.is_error !== false || event.subtype !== "success") firstFailedResult ??= event;
+      turnUsages.push(usageFrom(event.usage));
     },
     finish(exit, stderr) {
-      if (result?.subtype === "error_max_turns") {
+      if (firstFailedResult?.subtype === "error_max_turns") {
         throw new EvaluatorError("SOLVER_RESULT_INCOMPLETE", "Claude Code reached maxTurns before producing a final answer");
       }
-      if (exit.code !== 0 || exit.signal !== null || (result && (result.is_error !== false || result.subtype !== "success"))) {
-        const errors = Array.isArray(result?.errors) ? result.errors.filter(item => typeof item === "string").join("\n") : "";
-        const resultText = typeof result?.result === "string" ? result.result : "";
+      if (exit.code !== 0 || exit.signal !== null || firstFailedResult) {
+        const diagnosticResult = firstFailedResult ?? result;
+        const errors = Array.isArray(diagnosticResult?.errors) ? diagnosticResult.errors.filter(item => typeof item === "string").join("\n") : "";
+        const resultText = typeof diagnosticResult?.result === "string" ? diagnosticResult.result : "";
         const diagnostic = redactDiagnostic(errors || resultText || stderr || `Claude Code exited with code ${exit.code} and signal ${exit.signal}`, [secret]);
-        const status = tokenCount(result?.api_error_status);
+        const status = tokenCount(diagnosticResult?.api_error_status);
         const failure = classifyError(Object.assign(new Error(diagnostic), status === null ? {} : { status }), {
-          phase: "solve", component: "claudecode", fallbackCode: result?.is_error ? "SOLVER_RESULT_INCOMPLETE" : "SOLVER_PROCESS_CRASHED",
+          phase: "solve", component: "claudecode", fallbackCode: diagnosticResult?.is_error ? "SOLVER_RESULT_INCOMPLETE" : "SOLVER_PROCESS_CRASHED",
         });
         throw new EvaluatorError(failure.code, failure.message, failure.details);
       }
       if (!result) throw new EvaluatorError("SOLVER_RESULT_INCOMPLETE", "Claude Code exited without a result event");
       if (typeof result.result !== "string") throw new EvaluatorError("SOLVER_PROTOCOL_INVALID", "Claude Code result is missing its final text");
-      return { finalText: result.result, usage: usageFrom(result.usage) };
+      const sum = (field: keyof Usage): number | null => {
+        let value = 0;
+        for (const usage of turnUsages) {
+          const tokens = usage[field];
+          if (tokens === null) return null;
+          value += tokens;
+        }
+        return tokenCount(value);
+      };
+      return { finalText: result.result,
+        usage: { inputTokens: sum("inputTokens"), outputTokens: sum("outputTokens"), totalTokens: sum("totalTokens") } };
     },
   });
 }

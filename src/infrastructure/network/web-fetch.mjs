@@ -26,26 +26,32 @@ function publicLookup(host, options, callback) {
   lookup(host, { ...options, all: true }, (error, addresses) => {
     if (error) return callback(error);
     if (!addresses.length || addresses.some(({ address }) => !publicAddress(address))) {
-      return callback(Error("WebFetch requires a public web address"));
+      return callback(new Error("WebFetch requires a public web address"));
     }
     if (options.all) callback(null, addresses);
     else callback(null, addresses[0].address, addresses[0].family);
   });
 }
 
-export async function fetchWebPage(rawUrl, allowedHosts, signal) {
+export function publicWebUrl(rawUrl, allowedHosts) {
   if (typeof rawUrl !== "string") throw Error("WebFetch requires a URL");
-  let url = new URL(rawUrl);
+  const url = URL.parse(rawUrl);
+  if (!url) throw new Error("WebFetch requires a public HTTP(S) URL");
+  const host = url.hostname.replace(/^\[|\]$/gu, "").replace(/\.$/u, "");
+  if (!["http:", "https:"].includes(url.protocol) || url.username || url.password ||
+    host === "localhost" || host.endsWith(".localhost") || (isIP(host) && !publicAddress(host))) {
+    throw new Error("WebFetch requires a public HTTP(S) URL without credentials");
+  }
+  if (allowedHosts && !allowedHosts.some(rule => rule.startsWith("*.") ? host.endsWith(rule.slice(1)) : host === rule)) {
+    throw new Error("WebFetch host is outside the task network allowlist");
+  }
+  return url;
+}
+
+export async function fetchWebPage(rawUrl, allowedHosts, signal) {
+  let url = publicWebUrl(rawUrl, allowedHosts);
   const timeout = AbortSignal.any([signal, AbortSignal.timeout(30_000)]);
   for (let redirects = 0; redirects <= 5; redirects++) {
-    const host = url.hostname.replace(/^\[|\]$/gu, "").replace(/\.$/u, "");
-    if (!["http:", "https:"].includes(url.protocol) || url.username || url.password ||
-      host === "localhost" || host.endsWith(".localhost") || (isIP(host) && !publicAddress(host))) {
-      throw Error("WebFetch requires a public HTTP(S) URL without credentials");
-    }
-    if (allowedHosts && !allowedHosts.some(rule => rule.startsWith("*.") ? host.endsWith(rule.slice(1)) : host === rule)) {
-      throw Error("WebFetch host is outside the task network allowlist");
-    }
     const client = url.protocol === "https:" ? https : http;
     const response = await new Promise((resolve, reject) => {
       client.get(url, { signal: timeout, lookup: publicLookup, headers: { accept: "text/*, application/json, application/xml", "accept-encoding": "identity" } }, resolve)
@@ -54,7 +60,7 @@ export async function fetchWebPage(rawUrl, allowedHosts, signal) {
     try {
       const status = response.statusCode;
       if ([301, 302, 303, 307, 308].includes(status) && response.headers.location) {
-        url = new URL(response.headers.location, url);
+        url = publicWebUrl(new URL(response.headers.location, url).href, allowedHosts);
         continue;
       }
       if (status < 200 || status >= 300) throw Error("WebFetch returned HTTP " + status);

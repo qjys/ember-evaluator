@@ -1,8 +1,7 @@
 import { createServer } from "node:http";
-import { text } from "node:stream/consumers";
+import { buffer, text } from "node:stream/consumers";
 import { pipeline } from "node:stream/promises";
 import { Transform } from "node:stream";
-import { applyReasoningEffort } from "../../../infrastructure/models/reasoning-effort.mjs";
 
 const routes = {
   "openai-completions": ["/chat/completions"],
@@ -77,10 +76,11 @@ function toolResponseGuard(allowed) {
   };
 }
 
-export async function startModelRelay({ api, baseUrl, apiKey, token, reasoningEffort, maxTokens, disableBuiltinTools = false, disableMcp = false, isMcpTool = name => name.startsWith("mcp__"), disableHostedSearch = false, disableWebFetch = false, completeSearch, captureUsage = false, maxModelCalls }) {
+export async function startModelRelay({ api, baseUrl, apiKey, token, maxTokens, disableBuiltinTools = false, disableMcp = false, isMcpTool = name => name.startsWith("mcp__"), disableHostedSearch = false, disableWebFetch = false, completeWebTools, captureUsage = false, maxModelCalls }) {
   const anthropic = api === "anthropic-messages";
   const base = anthropic && !baseUrl.endsWith("/v1") ? baseUrl + "/v1" : baseUrl;
   const totals = { inputTokens: 0, outputTokens: 0, reported: false };
+  let messagesAuthHeader = "x-api-key";
   let modelCalls = 0;
   const server = createServer(async (request, response) => {
     const authorized = request.headers.authorization === "Bearer " + token
@@ -98,7 +98,7 @@ export async function startModelRelay({ api, baseUrl, apiKey, token, reasoningEf
           type: "invalid_request_error", code: "MAX_TURNS_EXCEEDED", message: `The configured maxTurns limit (${maxModelCalls}) was reached` } }));
         return;
       }
-      const headers = new Headers(anthropic ? { "x-api-key": apiKey } : { authorization: "Bearer " + apiKey });
+      const headers = new Headers();
       for (const name of requestHeaders) {
         const value = request.headers[name];
         if (typeof value === "string") headers.set(name, value);
@@ -106,9 +106,9 @@ export async function startModelRelay({ api, baseUrl, apiKey, token, reasoningEf
       let body = request;
       let guard;
       let observeSearchResponse;
-      if (disableBuiltinTools || disableHostedSearch || disableWebFetch || completeSearch || (route !== "/messages/count_tokens" && (reasoningEffort !== undefined || maxTokens !== undefined))) {
-        let payload = JSON.parse(await text(request));
-        if (reasoningEffort !== undefined && route !== "/messages/count_tokens") payload = applyReasoningEffort(payload, api, reasoningEffort);
+      if (disableBuiltinTools || disableHostedSearch || disableWebFetch || completeWebTools ||
+          (maxTokens !== undefined && route !== "/messages/count_tokens")) {
+        const payload = JSON.parse(await text(request));
         if (maxTokens !== undefined && route !== "/messages/count_tokens") {
           const key = api === "openai-responses" ? "max_output_tokens" : api === "openai-completions" && payload.max_completion_tokens !== undefined ? "max_completion_tokens" : "max_tokens";
           delete payload.max_tokens;
@@ -117,6 +117,8 @@ export async function startModelRelay({ api, baseUrl, apiKey, token, reasoningEf
           payload[key] = maxTokens;
         }
         if (disableBuiltinTools || disableHostedSearch) {
+          // Suppress standard hosted search when the task disallows it. Deployment routes
+          // must honor the request tool declarations rather than injecting automatic web access.
           delete payload.web_search_options;
           if (payload.extra_body) delete payload.extra_body.web_search_options;
         }
@@ -125,26 +127,41 @@ export async function startModelRelay({ api, baseUrl, apiKey, token, reasoningEf
         } else if (disableHostedSearch || disableWebFetch) {
           const blocked = tool => {
             const name = tool?.function?.name ?? tool?.name;
-            return (disableHostedSearch && /^web_search(?:$|_)/u.test(tool?.type))
-              || (disableWebFetch && /^(?:web_fetch|webfetch|fetchurl)$/iu.test(name));
+            return (disableHostedSearch && (/^web_search(?:$|_)/u.test(tool?.type) || /^(?:web_?search|search_web)$/iu.test(name)))
+              || (disableWebFetch && (/^web_fetch(?:$|_)/u.test(tool?.type) || /^(?:web_?fetch|fetchurl)$/iu.test(name)));
           };
           if (Array.isArray(payload.tools)) payload.tools = payload.tools.filter(tool => !blocked(tool));
           if (Array.isArray(payload.functions)) payload.functions = payload.functions.filter(tool => !blocked(tool));
           if (blocked(payload.tool_choice)) delete payload.tool_choice;
           if (blocked(payload.function_call)) delete payload.function_call;
         }
-        if (completeSearch && !disableBuiltinTools && !disableHostedSearch && route !== "/messages/count_tokens") {
-          const observe = await completeSearch(payload, controller.signal);
+        if (completeWebTools && !disableBuiltinTools && route !== "/messages/count_tokens") {
+          const observe = await completeWebTools(payload, controller.signal);
           if (api === "openai-responses") observeSearchResponse = observe;
         }
         body = JSON.stringify(payload);
+      } else if (anthropic) {
+        // A rejected Messages request can be replayed with the other auth header.
+        body = await buffer(request);
       }
       if (counted) modelCalls++;
       let upstream;
       try {
-        upstream = await fetch(base + route + url.search, {
-          method: "POST", headers, body, duplex: "half", redirect: "error", signal: controller.signal,
-        });
+        let authHeader = anthropic ? messagesAuthHeader : "authorization";
+        const send = () => {
+          headers.set(authHeader, authHeader === "authorization" ? "Bearer " + apiKey : apiKey);
+          return fetch(base + route + url.search, {
+            method: "POST", headers, body, duplex: "half", redirect: "error", signal: controller.signal,
+          });
+        };
+        upstream = await send();
+        if (anthropic && upstream.status === 401) {
+          await upstream.body?.cancel();
+          headers.delete(authHeader);
+          authHeader = authHeader === "x-api-key" ? "authorization" : "x-api-key";
+          upstream = await send();
+        }
+        if (anthropic && upstream.ok) messagesAuthHeader = authHeader;
       } catch (error) {
         if (counted) modelCalls--;
         throw error;

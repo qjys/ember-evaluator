@@ -22,18 +22,18 @@ All rows accept the six fields and values listed above. “Yes” means the harn
 | --- | --- | --- | --- | --- | --- | --- |
 | Codex | Yes | Native or fallback MCP | Independent fetch via MCP | Yes | Yes | Yes |
 | TRAE | Yes | Native or fallback MCP | Yes | Yes | Yes | Yes |
-| Claude Code | Yes | Hook / Exa | Yes | Yes | Yes | Yes |
+| Claude Code | Yes | Native / supplementary | Yes | Yes | Yes | Yes |
 | CodeBuddy | Yes | Native or fallback MCP | Yes | Yes | Yes | Yes |
 | Qwen Code | Yes | Native or fallback MCP | Yes | Yes | Yes | Yes |
 | Kimi Code | Yes | Native or fallback MCP | Yes | Yes | Yes | Yes |
 | MiniMax Code | Yes | Native or fallback MCP | Yes | Yes | Yes | Yes |
 | ZCode | Yes | Fallback MCP | Yes | Yes | Yes | Yes |
 | OpenCode | Yes | Native Exa | Yes | Yes | Yes | Yes |
-| SimpleAgent (no Bundle) | Yes | Pi / Exa | No built-in | No built-in | Yes | Yes |
-| DSH (Bundle) | Yes | DSH / Exa | Yes | Yes | Yes | Yes |
-| Pi (Bundle) | Yes | Pi / Exa | Bundle-provided | Bundle-provided | Yes | Yes |
+| SimpleAgent (no Bundle) | Yes | Pi / supplementary | Direct HTTP when explicitly enabled | No built-in | Yes | Yes |
+| DSH (Bundle) | Yes | Native / supplementary | Yes | Yes | Yes | Yes |
+| Pi (Bundle) | Yes | Pi / supplementary | Direct HTTP when explicitly enabled | Bundle-provided | Yes | Yes |
 | JiuwenSwarm (Bundle) | Yes | Native or fallback MCP | Bundle default | Yes | Yes | Yes |
-| DeepAgents (Bundle) | Yes | Evaluator / Exa | Bundle-provided | Yes | Yes | Yes |
+| DeepAgents (Bundle) | Yes | Evaluator supplementary | Bundle or supplementary fetch when enabled | Yes | Yes | Yes |
 
 `tools: none` is compatible with `mcp: disabled` and either web field set to `disabled`. It conflicts with `webSearch: enabled` and `webFetch: enabled` because disabling built-ins disables both web tools. Omit `tools` to enable a web tool. Omit both web fields to keep only explicitly declared MCP tools.
 
@@ -41,11 +41,9 @@ Task networks `none` and `model-api` disable both WebSearch and WebFetch by defa
 
 Local file and shell operations run with the operating system user's permissions, including writable paths outside the task directory. Docker retains its configured user, mounts and network policy. CodeBuddy configures bypass for both the parent and child.
 
-On unrestricted networks Claude's WebSearch result hook and DSH's search service try Exa when native search returns no sources. Exa failures fall back to hosted search on the selected model endpoint. For CLIs that return an identifiable model function call and tool result, the relay supplies supplementary MCP results on the next model turn. The native function has priority when both tools are declared. With hosted search or an opaque tool result, the CLI or model can still choose the supplementary tool. OpenCode's native websearch uses Exa, so its fallback goes directly to the model service. Claude and Pi support search independently of MCP.
+Evaluator prefers the harness's native web tools. Supplemental tools can help when native tools have no usable backend or require credentials the user has not provided. Hooks and model relays append supplemental evidence when a native failure can be paired with its call. With hosted tools or opaque results, the harness or model can select the supplemental tool.
 
-Supplementary search records source URLs. Model text without source metadata is reported as a failure. Offline, model-api and domain-restricted tasks disable searches that cannot respect their network scope, including provider-hosted search. Declare custom Pi web tool names in `config.bundle` or `config.pi`.
-
-For Volcano Ark search through LiteLLM, check that the proxy has a deployment for the selected model name and that the upstream account has search enabled for it. Inspect Responses for `web_search_call.action.sources` or `url_citation` annotations. HTTP 200 alone only confirms request completion. The attempt reports an activation or authorization failure when Ark returns `ToolNotOpen` or explicitly denies access to web search.
+With unrestricted web access, Exa-backed search and fetch call the public MCP tools `web_search_exa` and `web_fetch_exa` without model API keys. Search results require structured sources. Trajectories or web-tool logs record the backends and failed attempts. Pi and SimpleAgent use direct HTTP for their supplementary fetch. Supplementary fetch on a domain allowlist also uses direct HTTP and checks every redirect. See [web tool network policy](network.md#web-tool-network-policy).
 
 For Hermes or DeepAgents installation, use `--network network.yaml` to configure package sources and proxies. WSL local needs a host-accessible proxy. Docker needs container-accessible addresses for the `build` and `runtime` stages. Include the local model gateway hostname in `noProxy`. See the [network guide](network.md).
 
@@ -149,7 +147,7 @@ Add `maxTokens: 8192` to a service to limit replies. Configure model request ret
 
 ## SimpleAgent (Based on Pi)
 
-Without a Bundle, SimpleAgent supplies search and has no built-in fetch or delegation tool. Explicitly disabling `webFetch` or `subagent` emits a solve warning and still passes the restriction to workspace extensions. With `webFetch: enabled`, the runner checks the active tools before the first model request and reports a configuration error if no extension registered `web_fetch`.
+SimpleAgent without a Bundle provides supplementary search. Set `webFetch: enabled` to read known URLs through the Evaluator's direct HTTP tool. The tool needs no Exa account or MCP and respects the task network policy. Keep `webSearch: disabled` to expose fetch without search. Disabling subagents reports that no delegation tool is built in.
 
 `simpleagent` is Evaluator's built-in solver, using the Pi SDK for the agent loop, model requests and tool calls. Without a bundle, it runs with Evaluator's default instructions and tools. For example, `benchmark: gsm8k` selects default SimpleAgent and requires no Pi Bundle preparation.
 
@@ -189,7 +187,9 @@ Provide both fields; the maximum must be at least the default. This fragment ret
 
 ## Codex
 
-Codex still runs through `exec`. The evaluator provides a separate `web_fetch` tool through its local MCP server, so a solver can fetch a page with search disabled. Disabling fetch also removes Codex's combined native search and page-opening tool. Search then uses Exa alone and returns source URLs. With `mcp: disabled`, explicit fetch or explicit search with fetch disabled fails before startup. With `tools: none`, the evaluator removes both supplementary web tools and leaves independently declared MCP servers subject to the `mcp` setting.
+The service’s `reasoningEffort` maps to Codex’s native `model_reasoning_effort`.
+
+Codex still runs through `exec`. The evaluator provides a separate `web_fetch` tool through its local MCP server, so a solver can fetch a page with search disabled. Disabling fetch also removes Codex's combined native search and page-opening tool. The supplementary search tool then returns source URLs. Set `webSearch: enabled`, `webFetch: enabled`, and `mcp: disabled` together to expose the native combined tool only. The model endpoint determines whether that tool can return page bodies. With MCP disabled, enabling fetch requires explicitly enabling search as well. Enabling search while explicitly disabling fetch also fails before startup. With `tools: none`, the evaluator removes both supplementary web tools and leaves independently declared MCP servers subject to the `mcp` setting.
 
 `codex` runs Codex CLI in the task working directory on the local machine or in Docker. Evaluator installs CLI version `0.167.0` during environment preparation and authenticates with the selected model service. Save the following experiment YAML and set `CODEX_MODEL`, `CODEX_ENDPOINT`, and `CODEX_API_KEY` before running it.
 
@@ -218,6 +218,8 @@ output:
 
 ## Claude Code
 
+An explicit service `reasoningEffort` sets the main agent’s effort through the native `--effort` flag. The CLI resolves the setting against the model’s supported levels and selects the effort for subagents and auxiliary requests.
+
 When task networking permits fetching, Claude Code enables native WebFetch for the main agent and subagents. The launcher sets `skipWebFetchPreflight` for those attempts to skip Anthropic’s domain safety lookup. Task networks `none` and `model-api`, `webFetch: disabled`, and `tools: none` all remove WebFetch.
 
 Evaluator installs Claude Code `2.1.322` for local and Docker tasks. Save this experiment YAML and set `CLAUDE_MODEL`, `CLAUDE_ENDPOINT`, and `CLAUDE_API_KEY` before running it.
@@ -242,10 +244,10 @@ output:
 ```
 
 - Set `base_url` to the API base. Claude Code sends requests to `/v1/messages` under that base and authenticates via `x-api-key`. Use `https://api.anthropic.com` for Anthropic or `https://api.deepseek.com/anthropic` for DeepSeek's compatible API.
-- Claude disables its internal sandbox. Linux UID 0 uses `dontAsk` with an allow rule for available tools. Other users run with `bypassPermissions`. Explicit tool exclusions apply in both modes. Bash is available locally and in Docker, and it runs with the permissions of the host or container process. On Windows, install Git for Windows and set `CLAUDE_CODE_GIT_BASH_PATH` to its `bash.exe` if Claude Code cannot find it.
+- Claude disables its internal sandbox. The Docker task uses `bypassPermissions` and retains its configured user, mounts, and network. A local Linux run as root uses `dontAsk`. Explicit tool exclusions apply in both modes. Bash runs with the permissions of the host or container process. On Windows, install Git for Windows and set `CLAUDE_CODE_GIT_BASH_PATH` to its `bash.exe` if Claude Code cannot find it.
 - On Linux, the runtime sends model requests through an attempt-local relay and clears its temporary credentials from Bash's environment.
 - For images and PDF pages, declare `image` in the service's `inputModalities`. For native PDFs, declare `pdf` and use a Messages endpoint that accepts document content blocks. See [image and PDF evaluations](multimodal.md).
-- `maxTokens` sets Claude Code's output token setting, and `contextWindow` sets the auto-compaction window between 100000 and 1000000 tokens. The solver rejects `retry`. Each attempt saves events, the trajectory, and stderr under `agent/`.
+- `maxTokens` sets the CLI output budget and the Messages API `max_tokens`. Set `contextWindow` between 100,000 and 1,000,000 tokens according to the model service's capacity. At 1,000,000, Evaluator selects Claude Code's `[1m]` mode, and the CLI strips the suffix from the model ID it sends to the service. The solver rejects `retry`. Each attempt saves events, the trajectory, and stderr under `agent/`.
 
 ## ZCode
 
@@ -279,13 +281,17 @@ The preparation timeouts allow up to 30 minutes for the initial build and can be
 
 Use the API base URL. Chat Completions and Responses usually use a URL ending in `/v1`. The solver also accepts `api: openai-responses` and `api: anthropic-messages`. Omit `retry`.
 
+The service’s `reasoningEffort` sets `reasoningLevel` in ZCode’s native model selection. ZCode resolves the level against the model’s capabilities and chooses the effort for WebFetch, WebSearch, and background requests.
+
 ZCode enables Bash in local and Docker runs. Use local mode for trusted tasks since Bash runs with the host process's permissions. Install Git Bash for Bash tools on Windows. Use Docker for tasks that need container isolation.
 
 For images and PDF pages, declare `image` in the service's `inputModalities`. For native PDFs, declare `pdf` and use an endpoint that accepts PDF input. Each attempt saves redacted session events, the Evaluator trajectory, and stderr under `agent/`. See [image and PDF evaluations](multimodal.md).
 
 ## TRAE CLI
 
-TRAE's native WebFetch works independently of MCP. Native search needs working credentials. Setting `mcp: disabled` removes the evaluator's supplementary Exa service.
+This TRAE version sends its native `model_reasoning_effort` setting over Chat Completions. To set the service’s `reasoningEffort` explicitly, use `api: openai-completions`. For Responses and Messages, omit the field.
+
+TRAE's native WebFetch works independently of MCP. Native search needs working credentials. Setting `mcp: disabled` removes the evaluator's supplementary search service.
 
 Evaluator downloads and caches the official `traecli` version `0.214.1` on x64 Windows, WSL, and Linux Docker. The first run or `warmup` needs access to the TRAE release CDN. Warmup requires no model key. Download proxies use the [network configuration](network.md).
 
@@ -318,6 +324,8 @@ output:
 - Set `inputModalities: [text, image]` for images and PDF `pages` attachments. Use pages mode for PDFs. Each attempt saves redacted session events, the Evaluator trajectory, and stderr under `agent/`. See [image and PDF evaluations](multimodal.md).
 
 ## CodeBuddy Code
+
+An explicit service `reasoningEffort` sets the main agent’s effort through the native `--effort` flag. The CLI resolves the setting against the model’s supported levels and selects the effort for subagents and auxiliary requests.
 
 Version 2.183.0 uses a pinned patch so `skills: disabled` disables project and plugin skills. The same plugin's MCP tools remain available when `mcp` is left at its default.
 
@@ -396,7 +404,7 @@ run:
 
 `maxTokens` sets the per-response output cap, `maxTurns` sets the native step limit, and `run.solveTimeoutSeconds` sets the task deadline. At limits of 1 and 2, Qwen, Kimi, MiniMax, and OpenCode issued 1 and 2 main-agent requests respectively. Omitted solver limits use the service settings and CLI defaults. MiniMax custom models default to 16,384 output tokens. Kimi omits its native output cap on Chat requests, so Evaluator applies an explicit `maxTokens` at the relay. Unknown custom models in Kimi and MiniMax default to a 200,000-token window. Set `contextWindow` for the actual service capacity.
 
-All four select Chat Completions, Responses, or Messages from the selected service's `api`. Explicit service `reasoningEffort` overrides native defaults and model-name inference. Real model credentials remain in the relay process; child CLIs receive a temporary local token. Qwen, Kimi, and OpenCode receive initial images over native ACP; MiniMax uses native `exec --file`. OpenCode transmits original PDFs over all three APIs. Qwen supports original PDFs on Chat Completions and Messages, and requires pages on Responses. Kimi drops binary ACP resources. MiniMax sends a file reference without the PDF bytes. Use pages mode for these two CLIs. Task skill directories and MCP servers are passed to the selected CLI when enabled.
+All four select Chat Completions, Responses, or Messages from the selected service's `api`. An explicit service `reasoningEffort` selects a native session effort in Qwen Code, Kimi Code and OpenCode. MiniMax Code receives it through its native `--effort` flag. The CLI decides how the selected effort is encoded and whether secondary requests inherit it. Qwen Code's native selector starts at `low`. Real model credentials remain in the relay process; child CLIs receive a temporary local token. Qwen, Kimi, and OpenCode receive initial images over native ACP; MiniMax uses native `exec --file`. OpenCode transmits original PDFs over all three APIs. Qwen supports original PDFs on Chat Completions and Messages, and requires pages on Responses. Kimi drops binary ACP resources. MiniMax sends a file reference without the PDF bytes. Use pages mode for these two CLIs. Task skill directories and MCP servers are passed to the selected CLI when enabled.
 
 When built-in tools are disabled, CLI model requests retain only registered MCP tool declarations. Evaluator also skips its automatic search fallback. Search tools provided by a task’s MCP servers follow the MCP setting and the task’s network policy.
 
@@ -412,10 +420,10 @@ Use the `harness.name` in the Bundle manifest to find its additional conditions.
 
 | Harness | Conditions |
 | --- | --- |
-| DSH | The six switches target the pinned 0.2.2-rc.1 runtime. Explicit search or fetch requires the selected profile and model service to expose `web_search` or `web_fetch`. The search plugin can call Exa directly. |
-| Pi | Extensions supply fetch and delegation. `pi.webSearchTools` and `pi.webFetchTools` select exact tool names. If the lists share a tool, setting one feature to `enabled` and the other to `disabled` conflicts. With `mcp: disabled`, explicitly enabled web tools must still be registered in the session. The same rules apply to aliases in `simpleagent.bundle`. |
+| DSH | The six switches target the pinned 0.2.2-rc.1 runtime. Explicit search or fetch requires the selected profile and model service to expose `web_search` or `web_fetch`. The search plugin can fall back to supplementary search. |
+| Pi | With `webFetch: enabled`, Pi prefers the Evaluator’s direct HTTP `web_fetch` tool, which works with `mcp: disabled`. It replaces common fetch-only tool names and tools named in `pi.webFetchTools`. Leaving `webFetch` at `default` keeps the Bundle's tools. `pi.webSearchTools` names search tools, and assigning a tool to opposing policies is a configuration error. The same rules apply to aliases in `simpleagent.bundle`. |
 | JiuwenSwarm | Fetch defaults to the Bundle configuration. Explicit fetch can activate the native fetch tool. With `mcp: disabled`, supplementary search is removed. Explicit search then requires a native search tool visible to the main session. A tool name in the config alone is insufficient. |
-| DeepAgents | The graph returned by `build_agent_for_run` controls built-ins, fetch, delegation, MCP and skills. The maintained example provides fetch. Other Bundles must implement fetch and report unsupported settings when building the graph. The evaluator's search tool can still run with MCP disabled. |
+| DeepAgents | The graph returned by `build_agent_for_run` controls built-ins, fetch, delegation, MCP and skills. The maintained example provides fetch. When explicitly enabled, Evaluator also provides a supplementary fetch tool to the graph. The evaluator's search and fetch tools can still run with MCP disabled. |
 
 JiuwenSwarm disables its inner sandbox and approval prompts. The main agent and the three default children (`statusline-setup`, `explore_agent`, and `plan_agent`) can load task and Bundle skills through their own native `skill_tool`. The optional `code_agent` and `browser_agent` also get their own readers when enabled. Setting `skills: disabled` removes skill discovery and the reader from these sessions. File tools retain their configured access. By default, the Bundle selects the available web tools. Set `webFetch: enabled` to enable the native `fetch_webpage` tool or `webFetch: disabled` to remove it from the model's tool list while keeping other tools available. Hermes uses a local terminal with approvals off. DeepAgents graphs and remote Dify workflows control their own execution backends. Adapters reject restrictions they cannot enforce.
 

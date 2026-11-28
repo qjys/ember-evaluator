@@ -106,10 +106,6 @@ async def _run(bundle_dir: Path, factory_module: str, emitter: Emitter) -> int:
     cwd = os.getcwd()
     provider = os.environ.get("AGENT_MODEL_PROVIDER", "") or "deepagents-default"
     model_name = os.environ.get("AGENT_MODEL_NAME", "")
-    if request.get("reasoningEffort") is not None:
-        from reasoning_effort import install_openai_reasoning_effort
-
-        install_openai_reasoning_effort(request["reasoningEffort"], model_name)
     emitter.emit({
         "type": "session",
         "sessionId": session_id,
@@ -184,29 +180,49 @@ async def _run(bundle_dir: Path, factory_module: str, emitter: Emitter) -> int:
             ]})
 
         tools.append(view_image)
+    def supplementary_web(mode, value, config=None):
+        script = Path(__file__).resolve().parents[1] / "runtimes/shared/assets/search-stdio.mjs"
+        args = ["node", str(script), mode]
+        if config is not None:
+            args.append(json.dumps(config))
+        result = subprocess.run(args, input=value, capture_output=True, text=True, timeout=100, check=False)
+        if result.returncode:
+            raise RuntimeError(result.stderr.strip() or "Supplementary web tool failed")
+        return result.stdout
+
     if request.get("webSearch"):
         from langchain.tools import tool
 
         @tool
         def evaluator_web_search(query: str) -> str:
             """Search public sources when native search is unavailable or returns no sources."""
-            script = Path(__file__).resolve().parents[1] / "runtimes/shared/assets/search-stdio.mjs"
-            result = subprocess.run(
-                ["node", str(script), "--query", "openai-completions", os.environ["OPENAI_BASE_URL"],
-                 model_name, "OPENAI_API_KEY"],
-                input=query, capture_output=True, text=True, timeout=130, check=False,
-            )
-            if result.returncode:
-                raise RuntimeError(result.stderr.strip() or "Supplementary web search failed")
-            return result.stdout
+            return supplementary_web("--query", query)
 
         tools.append(evaluator_web_search)
-    graph = composition.build_agent_for_run(
+    if request.get("webFetch") is not None:
+        from langchain.tools import tool
+
+        @tool
+        def evaluator_web_fetch(url: str) -> str:
+            """Read a public URL when the native fetch tool is unavailable or fails."""
+            return supplementary_web("--fetch", url, request["webFetch"])
+
+        tools.append(evaluator_web_fetch)
+    factory = composition.build_agent_for_run
+    effort = request.get("reasoningEffort")
+    effort_options = {} if effort is None else {"reasoning_effort": effort}
+    if effort_options:
+        try:
+            inspect.signature(factory).bind_partial(**effort_options)
+        except TypeError as error:
+            raise ValueError("DeepAgents bundle must accept reasoning_effort in build_agent_for_run to use service reasoningEffort") from error
+    graph = factory(
         policy=request.get("toolPolicy", {}),
         mcp_servers=request.get("mcpServers", []),
         skills_directories=request.get("skillsDirectories", []),
         tools=tools,
         middleware=(recorder,),
+        **effort_options,
     )
     if inspect.isawaitable(graph):
         graph = await graph

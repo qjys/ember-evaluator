@@ -73,8 +73,9 @@ const server = createServer(async (request, response) => {
   if (shellTool?.function?.parameters?.required?.includes("description")) markerArguments.description = `write ${task} marker`;
   if (!hasToolResult) {
     const taskMcp = userText.includes("call the task MCP");
-    const name = taskMcp ? "mcp__task__echo" : shell;
-    const args = taskMcp ? { value: "task-mcp-called" } : markerArguments;
+    const fetchUrl = userText.match(/call web_fetch (https?:\/\/\S+)/u)?.[1];
+    const name = fetchUrl ? "web_fetch" : taskMcp ? "mcp__task__echo" : shell;
+    const args = fetchUrl ? { url: fetchUrl } : taskMcp ? { value: "task-mcp-called" } : markerArguments;
     const chunks = [
       {
         id: `tool-${task}`,

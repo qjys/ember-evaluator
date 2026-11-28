@@ -40,6 +40,8 @@ The defaults below are framework fallbacks unless a row names another source. Th
 
 See [Solver and model service configuration](../solvers.md#model-services-and-independent-judges) and [image and PDF inputs](../multimodal.md) for adapter-specific behavior.
 
+For Claude Code and other CLI adapters that use Evaluator's Messages relay, set `model`, `base_url`, `api: anthropic-messages`, and `api_key`. The relay holds the service key and sends it as `x-api-key`, or as `Authorization: Bearer` if the upstream responds with HTTP 401. It remembers the successful header for the relay's lifetime and keeps both requests in the Messages protocol. A gateway URL and gateway key can be configured in the same fields.
+
 ## Benchmark, Solver, and Verifier
 
 | Field | Type | Requirement or default | Purpose and constraints |

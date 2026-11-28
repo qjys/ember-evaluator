@@ -16,7 +16,7 @@ import { runtimeProcessEnvironment } from "../../infrastructure/process/local.js
 
 import { PI_VERSION } from "./agentbundle-runtime.js";
 
-import { projectRunnerInput } from "./protocol.js";
+import { piFetchOptions, projectRunnerInput } from "./protocol.js";
 import { consumePiRunner } from "./process.js";
 
 import { type BundlePreparation, sameCandidate, claimPersistentState, preparedAttempt } from "../agentbundle/preparation-state.js";
@@ -118,6 +118,7 @@ export async function preparePi(
           piConfigDir: codingAgentDir,
           piSettings: settings,
           ...toolConfig,
+          ...piFetchOptions(toolAccess, session.solveNetwork),
         });
           signal.throwIfAborted();
           return start(

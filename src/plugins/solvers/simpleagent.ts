@@ -15,7 +15,7 @@ import type { AttemptContext, PreparedSolver, Solver } from "../../core/contract
 import type { PublicTask } from "../../core/contracts/task.js";
 import { createPiRuntimeInstallation } from "../../runtimes/pi/package-runtime.js";
 import { disposePiBundle, stagePiBundle, type PiBundleOptions, type StagedPiBundle } from "../../runtimes/pi/bundle.js";
-import { projectRunnerInput } from "../../runtimes/pi/protocol.js";
+import { piFetchOptions, projectRunnerInput } from "../../runtimes/pi/protocol.js";
 import { consumePiRunner, PiRunnerError } from "../../runtimes/pi/process.js";
 import { parseShellToolPolicy, type ShellToolPolicy } from "../../runtimes/pi/tool-policy.js";
 import { expectNonEmptyString, expectRecord, rejectUnknown } from "../../core/validation/input.js";
@@ -170,14 +170,14 @@ export class SimpleAgentSolver implements Solver {
     runner: string,
     context: AttemptContext,
   ): Promise<SolveResult> {
-    if (this.bundle === undefined) {
-      const inactive = (["webFetch", "subagent"] as const).filter(key => this.policy[key] === "disabled");
-      if (inactive.length) context.warning?.({
+    if (this.bundle === undefined && this.policy.subagent === "disabled") {
+      context.warning?.({
         code: "CONFIG_INVALID",
-        message: `simpleagent (Pi without Bundle): ${inactive.map(key => key + ": disabled").join(", ")} has no built-in capability to turn off. The policy still applies to workspace extensions.`,
+        message: "simpleagent (Pi without Bundle): subagent: disabled has no built-in capability to turn off. The policy still applies to workspace extensions.",
       });
     }
     const extensions = await this.extensions(session, context.signal);
+    const toolAccess = sessionToolPolicy("simpleagent", this.policy, session);
     const runnerInput = projectRunnerInput({
       ...(input.attachments?.length ? { media: await loadAttachments(input, session, context) } : {}),
       key: context.key,
@@ -187,7 +187,8 @@ export class SimpleAgentSolver implements Solver {
       workdir: session.workdir,
       outputDir: session.agentOutputDir,
       ...(this.toolPolicy === undefined ? {} : { toolPolicy: this.toolPolicy }),
-      toolAccess: sessionToolPolicy("simpleagent", this.policy, session),
+      toolAccess,
+      ...piFetchOptions(toolAccess, session.solveNetwork),
       ...(extensions === undefined ? {} : { extensions }),
     });
     const handle = await session.start(

@@ -9,6 +9,7 @@ import type { SolveResult } from "../../core/contracts/result.js";
 import type { AttemptContext, Solver, SolverProvenance } from "../../core/contracts/solver.js";
 import type { PublicTask } from "../../core/contracts/task.js";
 import { EvaluatorError } from "../../core/errors/evaluator-error.js";
+import { normalizeAllowedHosts } from "../../core/policies/network-policy.js";
 import { sessionToolPolicy, toolPolicyProvenance, type SolverToolPolicy } from "../../core/validation/solver-tool-policy.js";
 import { consumeCodeBuddy } from "../../runtimes/codebuddy/protocol.js";
 import { CODEBUDDY_ENTRY, CODEBUDDY_VERSION, codeBuddyRuntimeInstallation } from "../../runtimes/codebuddy/runtime.js";
@@ -87,6 +88,8 @@ export class CodeBuddySolver implements Solver {
         inheritEnv: false,
         input: Buffer.from(JSON.stringify({
           container: !local, outputDir: session.agentOutputDir, skillsDirectories: input.skillsDirectories, mcpServers: input.mcpServers,
+          fetchNetwork: typeof session.solveNetwork === "object"
+            ? { allowedHosts: normalizeAllowedHosts(session.solveNetwork.allowedHosts) } : session.solveNetwork ?? "bridge",
           apiKey: auth.value, api: model.api, baseUrl, model: model.name,
           maxTokens: model.maxTokens, contextWindow: model.contextWindow, reasoningEffort: model.reasoningEffort, maxTurns, toolPolicy,
           supportsImages: model.inputModalities?.includes("image") ?? false, prompt: input.prompt, token, media,

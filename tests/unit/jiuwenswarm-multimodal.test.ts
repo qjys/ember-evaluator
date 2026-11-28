@@ -1,3 +1,5 @@
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { expect, test } from "vitest";
 import { parse } from "yaml";
 import { mergeJiuwenswarmModelConfig } from "../../src/runtimes/jiuwenswarm/prepare.js";
@@ -38,4 +40,44 @@ test("text-only JiuwenSwarm does not enable vision or erase an explicit opt-out"
   const config = parse(mergeJiuwenswarmModelConfig("react:\n  enable_read_image_multimodal: false\n"));
   expect(config.react.enable_read_image_multimodal).toBe(false);
   expect(config.models.defaults[0].model_client_config.supports_vision).toBeUndefined();
+});
+
+const python = process.env.PYTHON_BIN ?? (process.platform === "win32" ? "python" : "python3");
+
+test("JiuwenSwarm removes empty proxy values before the native CLI loads", () => {
+  const runner = fileURLToPath(new URL("../../src/runtimes/jiuwenswarm/assets/multimodal-runner.py", import.meta.url));
+  const result = spawnSync(python, ["-c", `
+import io
+import os
+import runpy
+import sys
+from types import ModuleType
+from unittest.mock import patch
+
+proxy_names = ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY", "all_proxy", "ALL_PROXY")
+empty = {name: "" for name in proxy_names}
+empty["ALL_PROXY"] = " "
+no_proxy = {"NO_PROXY": "excluded-host.test"}
+
+resources = ModuleType("tool_policy")
+process_cli = ModuleType("jiuwenswarm.channels.process_cli")
+process_cli.app = object()
+cli_main = ModuleType("jiuwenswarm.channels.process_cli.main")
+
+def run(env, expected):
+    def assert_proxy_env(*_):
+        assert dict(os.environ) == expected
+
+    resources.install_task_resources = assert_proxy_env
+    cli_main.main = assert_proxy_env
+    with patch.dict(os.environ, env, clear=True):
+        sys.stdin = io.StringIO("{}")
+        runpy.run_path(sys.argv[1], run_name="__main__")
+
+with patch.dict(sys.modules, {resources.__name__: resources, process_cli.__name__: process_cli, cli_main.__name__: cli_main}):
+    configured = {"HTTPS_PROXY": "http://configured-proxy.test:3128"}
+    run(empty | no_proxy, no_proxy)
+    run(empty | configured | no_proxy, configured | no_proxy)
+`, runner], { encoding: "utf8", windowsHide: true, timeout: 10_000 });
+  expect(result.status, result.error?.message ?? result.stderr).toBe(0);
 });

@@ -40,6 +40,8 @@
 
 各适配器的配置行为见 [Solver 与模型服务](../solvers.zh-CN.md#模型服务与独立裁判)和[图片与 PDF 评测](../multimodal.zh-CN.md)。
 
+Claude Code 等使用 Evaluator Messages 转发层的 CLI 只需设置 `model`、`base_url`、`api: anthropic-messages` 和 `api_key`。转发层持有服务 Key，先用 `x-api-key`，收到上游 HTTP 401 时改用 `Authorization: Bearer` 再尝试一次。成功后，本次转发生命周期内沿用该请求头。两种鉴权方式都使用原生 Messages 协议。接入网关时，同样在这几个字段中填写网关地址和 Key。
+
 ## Benchmark、Solver 与 Verifier
 
 | 字段 | 类型 | 必填条件或默认值 | 用途与限制 |

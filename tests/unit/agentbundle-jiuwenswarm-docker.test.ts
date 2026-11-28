@@ -92,7 +92,7 @@ function fakeDockerSession(options: SessionOptions = {}): {
         }
         return fakeHandle({ stdout: `${options.probeOutput ?? JIUWENSWARM_PROCESS_CLI_MARKER}\n` });
       }
-      if (spec.executable === "cat") return fakeHandle({ stdout: `preferred_language: zh\nmodels:\n  defaults:\n    - model_client_config:\n        timeout: 1800\n        custom_headers: {}\n      model_config_obj:\n        max_tokens: 32768\n        reasoning_effort: low\n        context_window: 262144\n` });
+      if (spec.executable === "cat") return fakeHandle({ stdout: `preferred_language: zh\nmodels:\n  defaults:\n    - model_client_config:\n        timeout: 1800\n        custom_headers: {}\n      model_config_obj:\n        max_tokens: 32768\n        reasoning_level: medium\n        context_window: 262144\n` });
       throw new Error(`unexpected command: ${spec.executable} ${spec.args.join(" ")}`);
     },
     upload: async (source, target) => {
@@ -138,7 +138,7 @@ async function agentPaths(prefix: string): Promise<{ root: string; agent: string
   return { root, agent };
 }
 
-it("an explicit service effort uses the JiuwenSwarm SDK runner and overrides the installed effort", async () => {
+it("an explicit service effort selects the native JiuwenSwarm model preset", async () => {
   const digest = (await verifyBundleCandidate(fixtureBundle)).digest;
   const { session, solveSpec, uploaded } = fakeDockerSession({ verifyDigest: digest });
   const solver = dockerSolver(undefined, "low");
@@ -148,9 +148,11 @@ it("an explicit service effort uses the JiuwenSwarm SDK runner and overrides the
     const prepared = await solver.prepare(session, attemptContext(paths));
     await prepared.solve({ id: "test:0", prompt: "hello" }, attemptContext(paths)).catch(() => {});
     expect(solveSpec()?.args[0]).toMatch(/multimodal-runner\.py$/);
-    expect(solveSpec()?.env).toMatchObject({ EVALUATOR_REASONING_EFFORT: "low", MODEL_NAME: model.name });
+    expect(solveSpec()?.args).toContain(`--_model-selection=${model.name}`);
+    expect(solveSpec()?.env).toMatchObject({ MODEL_NAME: model.name });
+    expect(solveSpec()?.env).not.toHaveProperty("EVALUATOR_REASONING_EFFORT");
     const installed = parseYaml(uploaded[0]!);
-    expect(installed.models.defaults[0].model_config_obj.reasoning_effort).toBe("low");
+    expect(installed.models.defaults[0].model_config_obj.reasoning_level).toBe("low");
     await prepared.dispose?.(signal);
   } finally {
     await rm(paths.root, { recursive: true, force: true });
@@ -175,7 +177,7 @@ describe("agentbundle jiuwenswarm docker preparation", () => {
       }[] } };
       expect(installed.preferred_language).toBe("zh");
       expect(installed.models.defaults[0]!.model_config_obj).toEqual({ max_tokens: 32768,
-        reasoning_effort: "low", context_window: 262144 });
+        reasoning_level: "medium", context_window: 262144 });
       expect(installed.models.defaults[0]!.model_client_config).toMatchObject({ timeout: 300,
         stream_first_chunk_timeout: 180, stream_idle_timeout: 120, custom_headers: {} });
       expect(uploaded[0]).not.toContain("secret-key");

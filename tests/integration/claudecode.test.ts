@@ -144,9 +144,12 @@ test.skipIf(!enabled("local"))("Claude Code uses Bash locally and limits native 
 test.skipIf(!enabled("docker"))("Claude Code uses Bash and scores its file through the Docker model gateway", async () => {
   const root = await mkdtemp(join(tmpdir(), "arsi-evaluator-claude-docker-"));
   const fixture = await messagesFixture(true, [{
+    name: "Read",
+    input: { file_path: "/etc/os-release" },
+  }, {
     name: "Bash",
     input: {
-      command: 'test -z "${ANTHROPIC_API_KEY:-}${ANTHROPIC_AUTH_TOKEN:-}${ANTHROPIC_BASE_URL:-}" && printf answer > /workspace/result.txt && echo written',
+      command: 'test "$(id -u)" -eq 0 && test -z "${ANTHROPIC_API_KEY:-}${ANTHROPIC_AUTH_TOKEN:-}${ANTHROPIC_BASE_URL:-}" && printf answer > /workspace/result.txt && echo written',
       description: "Write the answer",
     },
   }]);
@@ -170,12 +173,13 @@ test.skipIf(!enabled("docker"))("Claude Code uses Bash and scores its file throu
       ...(networkConfigPath === undefined ? {} : { networkConfigPath }) });
     if (result.kind !== "local") throw new Error("Expected evaluation on the local scheduler");
     const [attempt] = result.snapshot.records;
-    expect(fixture.requests).toHaveLength(2);
+    expect(fixture.requests).toHaveLength(3);
     for (const request of fixture.requests) expect(request).toMatchObject({ model, authenticated: true });
     expect(fixture.requests[0]?.tools).toContain("Bash");
-    expect(fixture.requests[1]?.input).toMatch(/"type":"tool_result","content":"written(?:\\n)?"/u);
+    expect(fixture.requests[1]?.input).toContain("VERSION_CODENAME=bookworm");
+    expect(fixture.requests[2]?.input).toMatch(/"type":"tool_result","content":"written(?:\\n)?"/u);
     expect(attempt, JSON.stringify(attempt?.errors)).toMatchObject({ executionStatus: "completed", scoreStatus: "valid", verdict: { score: 1 },
-      collection: { trajectory: "complete" }, solve: { finalText, usage: { inputTokens: 44, outputTokens: 14, totalTokens: 58 } } });
+      collection: { trajectory: "complete" }, solve: { finalText, usage: { inputTokens: 66, outputTokens: 21, totalTokens: 87 } } });
     if (!attempt) throw new Error("Missing attempt");
     expect(result.snapshot.run.solverProvenance).toMatchObject({ claudeCodeVersion: CLAUDE_CODE_VERSION });
     await checkEvidence(join(result.runDirectory, "tasks", safeTaskKey(attempt.key.taskId), "attempts", attempt.key.attemptId, "agent"));

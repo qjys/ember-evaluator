@@ -17,6 +17,8 @@ export const EVENT_TYPES = new Set([
   "start",
   "message_start",
   "message",
+  "thinking",
+  "tool_call",
   "tool_start",
   "tool_result",
   "agent_end",

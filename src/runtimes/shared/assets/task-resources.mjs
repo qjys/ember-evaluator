@@ -1,6 +1,6 @@
 import { appendFile, cp, mkdir, readdir, stat } from "node:fs/promises";
 import { basename, join } from "node:path";
-import { startSearchMcp } from "../../../infrastructure/network/web-search.mjs";
+import { fetchWeb, startSearchMcp } from "../../../infrastructure/network/web-search.mjs";
 
 async function hasSkill(directory) {
   try { return (await stat(join(directory, "SKILL.md"))).isFile(); }
@@ -21,39 +21,44 @@ export async function stageSkills(directories, destination) {
   }
 }
 
-export async function taskServers(input, skipExa = false, fetchPage, configuredNames) {
+export async function taskServers(input, nativeSearchUsesExa = false, fetchPage, configuredNames) {
   const policy = input.toolPolicy ?? {};
   if (policy.mcp === "disabled") return { servers: [] };
   const servers = [...(input.mcpServers ?? [])];
+  const network = input.fetchNetwork;
+  if (policy.webFetch === "disabled" || network === "none" || network === "model-api") fetchPage = undefined;
+  else if (!fetchPage && network !== undefined) fetchPage = (url, signal) => fetchWeb(url, network?.allowedHosts, signal);
   if (policy.tools === "none" || policy.webSearch === "disabled" && !fetchPage) return { servers };
   const reserved = new Set([...servers.map(server => server.name), ...(configuredNames ? await configuredNames() : [])]);
   let name = "evaluator-search";
   while (reserved.has(name)) name += "-fallback";
   const record = input.outputDir ? async event => {
     await mkdir(input.outputDir, { recursive: true });
-    const fetch = event.backend === "http-fetch";
+    const fetch = event.operation === "fetch";
     await appendFile(join(input.outputDir, fetch ? "web-fetch.jsonl" : "web-search.jsonl"),
       JSON.stringify({ tool: name + (fetch ? "/web_fetch" : "/web_search"), ...event }) + "\n", { mode: 0o600 });
   } : undefined;
-  const search = await startSearchMcp(input, skipExa, record, fetchPage);
+  const search = await startSearchMcp(policy, record, fetchPage);
   servers.push({ name, transport: "http", url: search.url });
-  return { servers, close: search.close, completeSearch: policy.webSearch === "disabled" ? undefined
-    : nativeSearchFallback(search.url, name, record, skipExa ? "exa" : "native") };
+  return { servers, close: search.close, completeWebTools:
+    nativeWebFallback(search.url, name, record, nativeSearchUsesExa ? "exa" : "native", Boolean(fetchPage), policy.webSearch !== "disabled") };
 }
 
-// A few CLIs expose WebSearch as a model function but have no post-tool hook.
+// A few CLIs expose web tools as model functions but have no post-tool hook.
 // Complete the actual tool result on the next model turn, also for child agents.
 // Keep the original result in the native transcript and reuse results on retries.
-export function nativeSearchFallback(url, serverName, record, nativeBackend = "native") {
-  const nativeTool = /^(?:web_?search|search_web)$/iu;
-  const supplementary = new Set(["mcp__" + serverName + "__web_search", serverName + "_web_search"]);
+export function nativeWebFallback(url, serverName, record, nativeBackend = "native", fetchEnabled = false, searchEnabled = true) {
+  const nativeOperation = name => searchEnabled && /^(?:web_?search|search_web)$/iu.test(name) ? "web_search"
+    : fetchEnabled && /^(?:web_?fetch|fetchurl)$/iu.test(name) ? "web_fetch" : undefined;
+  const supplementary = (name, operation) => name === "mcp__" + serverName + "__" + operation || name === serverName + "_" + operation;
   const completed = new Map();
   const recorded = new Set();
   const pendingResponses = new Map();
   return async (payload, signal) => {
     const nameOf = tool => tool?.function?.name ?? tool?.name;
-    if (!payload.previous_response_id && Array.isArray(payload.tools) && payload.tools.some(tool => nativeTool.test(nameOf(tool)))) {
-      payload.tools = payload.tools.filter(tool => !supplementary.has(nameOf(tool)));
+    if (!payload.previous_response_id && Array.isArray(payload.tools)) {
+      const native = new Set(payload.tools.map(tool => nativeOperation(nameOf(tool))).filter(Boolean));
+      if (native.size) payload.tools = payload.tools.filter(tool => ![...native].some(operation => supplementary(nameOf(tool), operation)));
     }
     const previous = pendingResponses.get(payload.previous_response_id);
     // Some gateways require the original model alias to route an output-only continuation.
@@ -62,53 +67,65 @@ export function nativeSearchFallback(url, serverName, record, nativeBackend = "n
     const remember = (id, name, args) => {
       if (!id) return;
       calls.delete(id);
-      if (!nativeTool.test(name)) return;
+      // Qwen dispatches a deferred web_fetch through tool_call and replies with the outer ID.
+      const deferredFetch = fetchEnabled && name === "tool_call";
+      const operation = deferredFetch ? "web_fetch" : nativeOperation(name);
+      if (!operation) return;
       if (typeof args === "string") {
         try { args = JSON.parse(args); } catch { return; }
       }
-      const query = args?.query ?? args?.search_query;
-      if (typeof query !== "string" || !query.trim()) return;
+      if (deferredFetch) {
+        if (args?.name !== "web_fetch") return;
+        name = args.name;
+        args = args.arguments;
+      }
+      const value = operation === "web_fetch" ? args?.url : args?.query ?? args?.search_query;
+      if (typeof value !== "string" || !value.trim()) return;
       if (Object.keys(args).some(key => /domain|site|filter/iu.test(key) && args[key]?.length)) return;
-      calls.set(id, { name, query });
+      calls.set(id, { name, value, operation });
     };
     const complete = async (block, field, id, failed) => {
       const call = calls.get(id);
       if (!call) return;
-      const { name, query } = call;
+      const { name, value, operation } = call;
+      const isFetch = operation === "web_fetch";
       const content = block[field];
       const original = Array.isArray(content) ? content.map(part => part?.text ?? JSON.stringify(part)).join("\n")
         : typeof content === "string" ? content : JSON.stringify(content ?? "");
       // Only use addresses present in the native tool output. An error can
       // itself contain a help URL, so HTTP/tool errors still need a fallback.
-      const nativeError = failed || /^(?:error|failed)|tool_auth|unauthorized|no (?:search )?results/iu.test(original);
+      const nativeError = failed || /^(?:error|failed|HTTP\s+[45]\d{2}\b|\{\s*"(?:error|isError)")|tool_(?:auth|request_failed)|unauthorized|no (?:search )?results/iu.test(original.trimStart());
       const urls = nativeError ? [] : [...original.matchAll(/(?:\bURL:\s*|"(?:url|link)"\s*:\s*"|\]\()(https?:\/\/[^\s<>"\\)]+)/giu)]
         .map(match => URL.parse(match[1])).filter(link => link && !link.username && !link.password);
-      const key = JSON.stringify([id, query]);
+      const usable = isFetch ? !nativeError && original.trim().length > 0 : urls.length > 0;
+      const key = JSON.stringify([id, operation, value]);
       if (record && !recorded.has(key)) {
         recorded.add(key);
-        await record({ tool: name, origin: "native", backend: nativeBackend, ...(urls.length
-          ? { sources: [...new Set(urls.map(link => link.href))].map(url => ({ url })) }
-          : { failure: nativeError ? "native tool returned an error" : "native tool returned no source URLs" }) });
+        await record({ tool: name, origin: "native", backend: isFetch ? "native" : nativeBackend,
+          ...(isFetch ? { operation: "fetch" } : {}),
+          ...(usable ? (isFetch ? {} : { sources: [...new Set(urls.map(link => link.href))].map(url => ({ url })) })
+            : { failure: nativeError ? "native tool returned an error" : "native tool returned no content" }) });
       }
-      if (urls.length) return;
+      if (usable) return;
       let pending = completed.get(key);
       if (!pending) {
         pending = (async () => {
           const response = await fetch(url, { method: "POST", signal, redirect: "error",
             headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1,
-              method: "tools/call", params: { name: "web_search", arguments: { query } } }) });
-          if (!response.ok) throw Error("Supplementary search returned HTTP " + response.status);
+              method: "tools/call", params: { name: operation, arguments: isFetch ? { url: value } : { query: value } } }) });
+          if (!response.ok) throw Error("Supplementary web tool returned HTTP " + response.status);
           const reply = await response.json();
           const content = reply.result?.content?.[0]?.text;
-          if (typeof content !== "string") throw Error("Supplementary search returned no tool result");
-          if (reply.result.isError) return "Supplementary search failed: " + content;
+          if (typeof content !== "string") throw Error("Supplementary web tool returned no result");
+          if (reply.result.isError) return "Supplementary web tool failed: " + content;
+          if (isFetch) return content;
           const found = JSON.parse(content);
           return JSON.stringify({ backend: found.backend, sources: found.results });
         })();
         completed.set(key, pending);
       }
       try {
-        const extra = "\nSupplementary web search: " + await pending;
+        const extra = "\nSupplementary web " + (isFetch ? "fetch: " : "search: ") + await pending;
         if (typeof block[field] === "string") block[field] += extra;
         else if (Array.isArray(block[field])) block[field].push({ type: field === "output" ? "input_text" : "text", text: extra });
       } catch (error) {

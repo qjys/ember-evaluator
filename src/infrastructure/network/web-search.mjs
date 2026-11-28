@@ -1,6 +1,7 @@
 import { createServer } from "node:http";
 import { randomUUID } from "node:crypto";
 import { text } from "node:stream/consumers";
+import { fetchWebPage, publicWebUrl } from "./web-fetch.mjs";
 
 // Use only URLs returned by the backend's search result or citation fields.
 function sources(entries) {
@@ -8,116 +9,82 @@ function sources(entries) {
   for (const entry of entries) {
     const url = URL.parse(entry?.url);
     if (url && !url.username && !url.password && ["http:", "https:"].includes(url.protocol)) {
-      unique.set(url.href, { url: url.href, title: entry.title || url.hostname });
+      unique.set(url.href, { url: url.href, title: typeof entry.title === "string" && entry.title ? entry.title : url.hostname });
     }
   }
   return [...unique.values()];
 }
 
-async function post(url, headers, body, signal) {
-  const response = await fetch(url, {
-    method: "POST", headers: { "content-type": "application/json", ...headers },
-    body: JSON.stringify(body), signal, redirect: "error",
+const EXA_URL = "https://mcp.exa.ai/mcp";
+const EXA_REQUEST_TIMEOUT_MS = 30_000;
+const FETCH_TEXT_LIMIT = 96 * 1024;
+
+async function callExa(name, args, signal) {
+  signal.throwIfAborted();
+  const id = 1;
+  const response = await fetch(EXA_URL + "?tools=" + name, {
+    method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream" },
+    body: JSON.stringify({ jsonrpc: "2.0", id, method: "tools/call", params: { name, arguments: args } }),
+    signal: AbortSignal.any([signal, AbortSignal.timeout(EXA_REQUEST_TIMEOUT_MS)]), redirect: "error",
   });
   if (!response.ok) {
-    // LiteLLM may wrap the provider's structured error inside its message.
-    // Report actionable codes without copying upstream diagnostics or credentials into the trajectory.
-    const detail = await response.json().catch(() => null);
-    const error = detail?.error;
-    const providerError = [error?.code, error?.message].filter(value => typeof value === "string").join(" ");
-    if (/\bToolNotOpen\b|access denied for web search/iu.test(providerError)) {
-      throw Error(`HTTP ${response.status}: provider web search is not activated or authorized`);
-    }
-    if (/\bmodel_not_found\b|no healthy deployments for this model/iu.test(providerError)) {
-      throw Error(`HTTP ${response.status}: the selected model has no available search route`);
-    }
-    throw Error("HTTP " + response.status);
+    await response.body?.cancel();
+    throw Error("Exa returned HTTP " + response.status);
   }
-  if (response.headers.get("content-type")?.includes("text/event-stream")) {
-    for (const line of (await response.text()).split(/\r?\n/u)) {
-      if (line.startsWith("data:")) {
-        const message = JSON.parse(line.slice(5));
-        if (message.result || message.error) return message;
+  let message;
+  if (response.headers.get("content-type")?.includes("text/event-stream") && response.body) {
+    let pending = "";
+    for await (const chunk of response.body.pipeThrough(new TextDecoderStream())) {
+      pending += chunk;
+      const events = pending.split(/\r?\n\r?\n/u);
+      pending = events.pop();
+      for (const event of events) {
+        const data = event.split(/\r?\n/u).filter(line => line.startsWith("data:")).map(line => line.slice(5).trimStart()).join("\n");
+        if (!data) continue;
+        const value = parseMcpJson(data);
+        if (value.id === id) { message = value; break; }
       }
+      if (message) break;
     }
-    throw Error("search service returned no result event");
+  } else if (response.body) {
+    message = parseMcpJson(await response.text());
   }
-  return response.json();
+  if (!message?.result || message.error || message.result.isError) throw Error("Exa tool call failed");
+  return (message.result.content ?? []).filter(block => block.type === "text" && typeof block.text === "string")
+    .map(block => block.text).join("\n");
 }
 
-async function exaSearch(query, signal) {
-  const reply = await post("https://mcp.exa.ai/mcp?tools=web_search_exa", { accept: "application/json, text/event-stream" }, {
-    jsonrpc: "2.0", id: 1, method: "tools/call",
-    params: { name: "web_search_exa", arguments: { query, numResults: 5 } },
-  }, signal);
-  if (reply.error || reply.result?.isError) throw Error("Exa tool call failed");
-  const content = (reply.result?.content ?? []).map(block => block.text ?? "").join("\n");
+function parseMcpJson(value) {
+  try { return JSON.parse(value); } catch { throw Error("Exa returned invalid JSON"); }
+}
+
+export async function searchWeb(query, signal) {
+  if (typeof query !== "string" || !query.trim()) throw Error("web search requires a query");
+  const content = await callExa("web_search_exa", { query, objective: query, numResults: 5 }, signal);
   const results = sources([...content.matchAll(/^Title: (.+)\r?\nURL: (https?:\/\/\S+)/gmu)]
     .map(match => ({ title: match[1], url: match[2] })));
   if (!results.length) throw Error("Exa returned no sources");
   return { backend: "exa", results, content };
 }
 
-async function providerSearch(query, { api, baseUrl, apiKey, model }, signal) {
-  if (!baseUrl || !apiKey) throw Error("selected model service has no endpoint or credential");
-  const base = baseUrl.replace(/\/+$/u, "");
-  const bearer = { authorization: "Bearer " + apiKey };
-  let entries;
-  if (api === "openai-responses") {
-    const reply = await post(base + "/responses", bearer, {
-      model, input: query, tools: [{ type: "web_search", sources: ["doubao"] }],
-      // Ark returns URL citations on the message and rejects OpenAI's optional sources include.
-      tool_choice: { type: "web_search" },
-    }, signal);
-    entries = (reply.output ?? []).flatMap(item => item.type === "web_search_call" ? item.action?.sources ?? []
-      : (item.content ?? []).flatMap(part => (part.annotations ?? []).filter(a => a.type === "url_citation")));
-  } else if (api === "openai-completions") {
-    const reply = await post(base + "/chat/completions", bearer, {
-      model, messages: [{ role: "user", content: query }], web_search_options: {},
-    }, signal);
-    entries = (reply.choices?.[0]?.message?.annotations ?? []).filter(a => a.type === "url_citation").map(a => a.url_citation ?? a);
-  } else if (api === "anthropic-messages") {
-    const reply = await post(base + (base.endsWith("/v1") ? "/messages" : "/v1/messages"),
-      { "x-api-key": apiKey, "anthropic-version": "2023-06-01" }, {
-        model, max_tokens: 1024, messages: [{ role: "user", content: query }],
-        tools: [{ type: "web_search_20250305", name: "web_search" }], tool_choice: { type: "tool", name: "web_search" },
-      }, signal);
-    entries = (reply.content ?? []).flatMap(block => block.type === "web_search_tool_result" && Array.isArray(block.content)
-      ? block.content.filter(item => item.type === "web_search_result") : block.citations ?? []);
-  } else throw Error("selected model API does not expose hosted search");
-  const results = sources(entries);
-  if (!results.length) throw Error("selected model route returned no search sources");
-  return { backend: "model-service", results };
-}
-
-export async function searchWeb(query, service, signal, skipExa = false) {
-  if (typeof query !== "string" || !query.trim()) throw Error("web search requires a query");
-  const failures = [];
-  const backends = skipExa ? ["model-service"] : ["exa"];
-  if (!skipExa && !service.exaOnly) backends.push("model-service");
-  for (const backend of backends) {
-    signal.throwIfAborted();
-    const timeout = AbortSignal.any([signal, AbortSignal.timeout(backend === "exa" ? 30_000 : 90_000)]);
-    try {
-      const result = backend === "exa" ? await exaSearch(query, timeout) : await providerSearch(query, service, timeout);
-      return { ...result, failures };
-    } catch (error) {
-      signal.throwIfAborted();
-      failures.push(backend + ": " + error.message);
-    }
-  }
-  throw Error(failures.join("; "));
+export async function fetchWeb(rawUrl, allowedHosts, signal) {
+  const url = publicWebUrl(rawUrl, allowedHosts).href;
+  // A remote backend cannot enforce the task allowlist on redirects.
+  if (allowedHosts) return { backend: "http-fetch", ...await fetchWebPage(url, allowedHosts, signal) };
+  const body = await callExa("web_fetch_exa", { urls: [url] }, signal);
+  if (!body.trim()) throw Error("Exa returned no page body");
+  return { backend: "exa", url, body: body.slice(0, FETCH_TEXT_LIMIT), truncated: body.length > FETCH_TEXT_LIMIT };
 }
 
 // Stateless Streamable HTTP server inside the solve environment. The CLI sees
-// a local capability URL. Only this process receives the upstream credential.
-export async function startSearchMcp(service, skipExa = false, record, fetchPage) {
+// a local capability URL. Supplementary requests do not carry model credentials.
+export async function startSearchMcp(policy = {}, record, fetchPage) {
   const path = "/" + randomUUID();
   const lifetime = new AbortController();
   const tool = { name: "web_search", description: "Search public web sources. If your tool list has no native WebSearch, or native search returned no sources, call this tool directly. Its result includes source titles and URLs you can cite.",
     inputSchema: { type: "object", properties: { query: { type: "string" } }, required: ["query"] } };
-  const tools = service.toolPolicy?.webSearch === "disabled" ? [] : [tool];
-  if (fetchPage) tools.push({ name: "web_fetch", description: "Read the actual body of a public HTTP or HTTPS webpage by URL.",
+  const tools = policy.webSearch === "disabled" ? [] : [tool];
+  if (fetchPage) tools.push({ name: "web_fetch", description: "Read the actual body of a public HTTP or HTTPS webpage by URL when native WebFetch is unavailable or fails.",
     inputSchema: { type: "object", properties: { url: { type: "string" } }, required: ["url"] } });
   const server = createServer(async (req, res) => {
     if (req.url !== path) return res.writeHead(404).end();
@@ -140,12 +107,12 @@ export async function startSearchMcp(service, skipExa = false, record, fetchPage
         try {
           const signal = AbortSignal.any([lifetime.signal, controller.signal]);
           const found = isFetch ? await fetchPage(message.params.arguments?.url, signal)
-            : await searchWeb(message.params.arguments?.query, service, signal, skipExa);
-          await record?.(isFetch ? { backend: "http-fetch", status: found.status, truncated: found.truncated }
-            : { backend: found.backend, sources: found.results, failures: found.failures });
+            : await searchWeb(message.params.arguments?.query, signal);
+          await record?.(isFetch ? { operation: "fetch", backend: found.backend ?? "http-fetch", status: found.status, truncated: found.truncated }
+            : { backend: found.backend, sources: found.results });
           result = { content: [{ type: "text", text: JSON.stringify(found) }] };
         } catch (error) {
-          await record?.({ ...(isFetch ? { backend: "http-fetch" } : {}), failure: error.message });
+          await record?.({ ...(isFetch ? { operation: "fetch" } : {}), failure: error.message });
           result = { isError: true, content: [{ type: "text", text: error.message }] };
         }
       } else return send({ error: { code: -32601, message: "Method not found" } });

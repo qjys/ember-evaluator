@@ -17,7 +17,7 @@ test("native output preserves split UTF-8 and rejects corrupt or truncated recor
   await expect(read(Buffer.from([0xff, 0x0a]))).rejects.toThrow();
 });
 
-test.each(["openai-completions", "openai-responses", "anthropic-messages"])("native CLI relay applies %s limits and effort on every call without leaking its key", async api => {
+test.each(["openai-completions", "openai-responses", "anthropic-messages"])("native CLI relay applies %s limits while preserving native reasoning and protecting its key", async api => {
   const requests: Record<string, unknown>[] = [];
   const server = createServer(async (request, response) => {
     let text = "";
@@ -32,24 +32,22 @@ test.each(["openai-completions", "openai-responses", "anthropic-messages"])("nat
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
   const address = server.address();
   if (!address || typeof address === "string") throw Error("No fixture port");
-  const relay = await startModelRelay({ api, baseUrl: `http://127.0.0.1:${address.port}/v1`, apiKey: "upstream-secret", token: "relay-token", reasoningEffort: "low", maxTokens: 70000, disableBuiltinTools: true, captureUsage: true });
+  const relay = await startModelRelay({ api, baseUrl: `http://127.0.0.1:${address.port}/v1`, apiKey: "upstream-secret", token: "relay-token", maxTokens: 70000, disableBuiltinTools: true, captureUsage: true });
   try {
     const route = api === "openai-completions" ? "/chat/completions" : api === "openai-responses" ? "/responses" : "/messages";
-    for (let i = 0; i < 2; i++) {
+    const nativeReasoning = api === "openai-responses"
+      ? [{ reasoning: { effort: "max", summary: "auto" } }, {}]
+      : api === "anthropic-messages"
+        ? [{ output_config: { effort: "max" } }, { thinking: { type: "disabled" }, output_config: { effort: "low" } }]
+        : [{ reasoning_effort: "max" }, { reasoning_effort: "low", enable_thinking: false }];
+    for (const reasoning of nativeReasoning) {
       const response = await fetch(relay.endpoint + route, { method: "POST", headers: { authorization: "Bearer relay-token", "content-type": "application/json" },
-        body: JSON.stringify({ model: "fixture", tools: [{ type: "function", name: "Bash" }], tool_choice: "required", web_search_options: {}, extra_body: { web_search_options: {} }, max_tokens: 8, reasoning_effort: "high" }) });
+        body: JSON.stringify({ model: "fixture", tools: [{ type: "function", name: "Bash" }], tool_choice: "required", web_search_options: {}, extra_body: { web_search_options: {} }, max_tokens: 8, ...reasoning }) });
       expect(response.status).toBe(200);
       expect(await response.text()).not.toContain("upstream-secret");
     }
-    expect(requests).toHaveLength(2);
-    for (const request of requests) {
-      expect(request.tools).toBeUndefined();
-      expect(request.tool_choice).toBeUndefined();
-      expect(request.web_search_options).toBeUndefined();
-      expect(request.extra_body).not.toHaveProperty("web_search_options");
-      expect(request).toMatchObject(api === "openai-responses" ? { max_output_tokens: 70000, reasoning: { effort: "low" } }
-        : api === "anthropic-messages" ? { max_tokens: 70000, output_config: { effort: "low" } } : { max_tokens: 70000, reasoning_effort: "low" });
-    }
+    const limit = api === "openai-responses" ? { max_output_tokens: 70000 } : { max_tokens: 70000 };
+    expect(requests).toEqual(nativeReasoning.map(reasoning => ({ model: "fixture", extra_body: {}, ...limit, ...reasoning })));
     expect(relay.usage()).toEqual({ inputTokens: 26, outputTokens: 4, totalTokens: 30 });
     expect((await fetch(relay.endpoint + route, { method: "POST", body: "{}" })).status).toBe(401);
   } finally { relay.close(); server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); }

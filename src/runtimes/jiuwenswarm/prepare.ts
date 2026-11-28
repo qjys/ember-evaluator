@@ -1,3 +1,4 @@
+import { normalizeAllowedHosts } from "../../core/policies/network-policy.js";
 import { pickSolverToolPolicy } from "../../core/validation/solver-tool-policy.js";
 import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
@@ -5,7 +6,6 @@ import { dirname, join, posix } from "node:path";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import type { ReasoningEffort } from "../../core/contracts/config.js";
 import { expectRecord } from "../../core/validation/input.js";
-import { applyReasoningEffort } from "../../infrastructure/models/reasoning-effort.mjs";
 
 import type { EnvironmentSession } from "../../core/contracts/environment.js";
 import type { AttemptContext, PreparedSolver } from "../../core/contracts/solver.js";
@@ -46,9 +46,34 @@ models:
       model_config_obj: {}
 `.trim();
 
+function setNativeReasoningLevel(config: Record<string, unknown>, level: ReasoningEffort): void {
+  const legacy = ["reasoning_effort", "thinking", "enable_thinking", "thinking_budget", "thinking_strategy"];
+  const extra = { ...expectRecord(config.extra_body ?? {}, "JiuwenSwarm extra_body") };
+  // The pinned SDK gives legacy wire controls precedence over reasoning_level.
+  // Remove those defaults from the selected preset and keep other template options.
+  for (const key of legacy) {
+    delete config[key];
+    delete extra[key];
+  }
+  delete extra.reasoning;
+  if (config.chat_template_kwargs != null || extra.chat_template_kwargs != null) {
+    const template = {
+      ...expectRecord(config.chat_template_kwargs ?? {}, "JiuwenSwarm chat_template_kwargs"),
+      ...expectRecord(extra.chat_template_kwargs ?? {}, "JiuwenSwarm extra_body chat_template_kwargs"),
+    };
+    for (const key of legacy) delete template[key];
+    delete config.chat_template_kwargs;
+    if (Object.keys(template).length) extra.chat_template_kwargs = template;
+    else delete extra.chat_template_kwargs;
+  }
+  if (config.extra_body != null || Object.keys(extra).length) config.extra_body = extra;
+  config.reasoning_level = level;
+}
+
 /** Merge bounded model client timeouts into the install-written jiuwenswarm
  *  config.yaml without clobbering the bundle sections or bootstrap additions. */
-export function mergeJiuwenswarmModelConfig(existing: string, images = false, reasoningEffort?: ReasoningEffort,
+export function mergeJiuwenswarmModelConfig(existing: string, images = false,
+  reasoning?: { modelName: string; level: ReasoningEffort },
   limits: { maxTokens?: number; maxTurns?: number; contextWindow?: number } = {}): string {
   let doc: Record<string, unknown> = {};
   if (existing.trim() !== "") {
@@ -76,18 +101,25 @@ export function mergeJiuwenswarmModelConfig(existing: string, images = false, re
   const defaults = models.defaults;
   if (defaults !== undefined && !Array.isArray(defaults))
     throw new AgentBundleError("CONFIG_INVALID", "jiuwenswarm models.defaults must be an array");
-  const entries = Array.isArray(defaults) && defaults.length ? defaults : [fallback];
-  const merged = entries.map((entry: unknown) => {
-    if (!entry || typeof entry !== "object" || Array.isArray(entry))
-      throw new AgentBundleError("CONFIG_INVALID", "jiuwenswarm model entry must be a mapping");
-    const model = entry as Record<string, unknown>;
+  const entries = (Array.isArray(defaults) && defaults.length ? defaults : [models.default ?? fallback])
+    .map(entry => expectRecord(entry, "jiuwenswarm model entry"));
+  let primary: (typeof entries)[number] | undefined;
+  if (reasoning !== undefined) {
+    const candidates = entries.filter(entry => {
+      const client = expectRecord(entry.model_client_config ?? {}, "jiuwenswarm model_client_config");
+      const name = client.model_name ?? clientDefaults.model_name;
+      return name === reasoning.modelName || name === "${MODEL_NAME}" || name === "${AGENT_MODEL_NAME}";
+    });
+    primary = candidates.find(entry => entry.is_default === true) ?? candidates[0];
+    if (primary === undefined)
+      throw new AgentBundleError("CONFIG_INVALID", `JiuwenSwarm has no model entry for the selected service model ${reasoning.modelName}`);
+  }
+  const merged = entries.map(model => {
     const requestConfig = expectRecord(model.model_config_obj ?? {}, "jiuwenswarm model_config_obj");
-    const configured = reasoningEffort === undefined ? requestConfig
-      : applyReasoningEffort(requestConfig, "openai-completions", reasoningEffort);
+    const configured: Record<string, unknown> = { ...requestConfig };
+    if (reasoning !== undefined && model === primary) setNativeReasoningLevel(configured, reasoning.level);
     if (limits.maxTokens !== undefined) configured.max_tokens = limits.maxTokens;
     if (limits.contextWindow !== undefined) configured.context_window = limits.contextWindow;
-    if (reasoningEffort !== undefined && requestConfig.extra_body !== undefined)
-      configured.extra_body = applyReasoningEffort(requestConfig.extra_body, "openai-completions", reasoningEffort);
     if (images && (model.model_client_config as Record<string, unknown> | undefined)?.supports_vision === false)
       throw new AgentBundleError("CONFIG_INVALID", "JiuwenSwarm model supports_vision disables native image input");
     // Bound transport waits without replacing the installed model request
@@ -112,7 +144,11 @@ function jiuwenswarmLimits({ model, options }: BundlePreparation) {
   };
 }
 
-function configureJiuwenswarmTools(config: string, preparation: BundlePreparation, root: string, local: boolean) {
+function jiuwenswarmReasoning({ model }: BundlePreparation) {
+  return model.reasoningEffort === undefined ? undefined : { modelName: model.name, level: model.reasoningEffort };
+}
+
+function configureJiuwenswarmTools(config: string, preparation: BundlePreparation, root: string, local: boolean, network: EnvironmentSession["solveNetwork"]) {
   const doc = expectRecord(parseYaml(config), "JiuwenSwarm config");
   const mcp = expectRecord(doc.mcp ?? {}, "JiuwenSwarm MCP");
   const servers = mcp.servers ?? [];
@@ -133,12 +169,15 @@ function configureJiuwenswarmTools(config: string, preparation: BundlePreparatio
   const path = local ? join : posix.join;
   const entry = path(root, "runtimes", "shared", "assets", "search-stdio.mjs");
   const existing = servers.filter(server => server?.args?.[0] !== entry);
-  if (options.tools === "none" || options.webSearch === "disabled") return stringifyYaml({ ...doc, mcp: { ...mcp, servers: existing } });
+  const search = options.webSearch !== "disabled";
+  const fetch = options.webFetch !== "disabled";
+  if (options.tools === "none" || !search && !fetch) return stringifyYaml({ ...doc, mcp: { ...mcp, servers: existing } });
+  const configArg = JSON.stringify({ search, fetch,
+    ...(typeof network === "object" ? { allowedHosts: normalizeAllowedHosts(network.allowedHosts) } : {}) });
   let name = "evaluator-search";
   while (existing.some(server => server?.name === name)) name += "-fallback";
   return stringifyYaml({ ...doc, mcp: { ...mcp, servers: [...existing, { name, enabled: true, transport: "stdio",
-    command: local ? process.execPath : "node", args: [entry, "--serve", preparation.model.api, preparation.model.endpoint,
-      preparation.model.name, "API_KEY"] }] } });
+    command: local ? process.execPath : "node", args: [entry, "--serve", configArg] }] } });
 }
 
 function imageInputEnabled(preparation: BundlePreparation): boolean {
@@ -177,9 +216,10 @@ export async function prepareJiuwenswarm(
   const policy = pickSolverToolPolicy(preparation.options);
   const hasPolicy = Object.keys(policy).length > 0;
   const limits = jiuwenswarmLimits(preparation);
+  const reasoning = jiuwenswarmReasoning(preparation);
   const identity = createHash("sha256")
     .update(canonicalJson({ kind: "jiuwenswarm", candidate, runtime: runtime.identity, images, ...limits, ...(hasPolicy ? { toolPolicy: policy } : {}),
-      ...(preparation.model.reasoningEffort === undefined ? {} : { reasoningEffort: preparation.model.reasoningEffort }) }))
+      ...(reasoning === undefined ? {} : { reasoning }) }))
     .digest("hex");
   const configuredHome = preparation.options.jiuwenswarmhome;
   const customHome = configuredHome !== undefined;
@@ -247,8 +287,8 @@ export async function prepareJiuwenswarm(
       return "";
     });
     await mkdir(dirname(configPath), { recursive: true });
-    const configured = mergeJiuwenswarmModelConfig(installedConfig, images, preparation.model.reasoningEffort, limits);
-    await writeFile(configPath, configureJiuwenswarmTools(configured, preparation, runtime.root, true), { mode: 0o600 });
+    const configured = mergeJiuwenswarmModelConfig(installedConfig, images, reasoning, limits);
+    await writeFile(configPath, configureJiuwenswarmTools(configured, preparation, runtime.root, true, session.solveNetwork), { mode: 0o600 });
     return preparedAttempt(
       release,
       async (input, signal) => {
@@ -267,6 +307,7 @@ export async function prepareJiuwenswarm(
               session.workdir,
               "--timeout",
               String(preparation.options.jiuwenswarmTimeoutSeconds ?? JIUWENSWARM_TIMEOUT_SECONDS),
+              ...(reasoning === undefined ? [] : [`--_model-selection=${reasoning.modelName}`]),
             ],
             cwd: session.workdir,
             env: {
@@ -277,7 +318,6 @@ export async function prepareJiuwenswarm(
               PYTHONIOENCODING: "utf-8",
               JIUWENSWARM_DATA_DIR: state,
               ...(hasPolicy ? { EVALUATOR_JIUWENSWARM_TOOL_POLICY: JSON.stringify(policy) } : {}),
-              ...(preparation.model.reasoningEffort === undefined ? {} : { EVALUATOR_REASONING_EFFORT: preparation.model.reasoningEffort }),
               API_BASE: endpoint,
               API_KEY: preparation.auth.value,
               MODEL_NAME: preparation.model.name,
@@ -340,9 +380,10 @@ export async function prepareJiuwenswarmDocker(
   const policy = pickSolverToolPolicy(preparation.options);
   const hasPolicy = Object.keys(policy).length > 0;
   const limits = jiuwenswarmLimits(preparation);
+  const reasoning = jiuwenswarmReasoning(preparation);
   const identity = createHash("sha256")
     .update(canonicalJson({ kind: "jiuwenswarm-docker", candidate, runtime: runtime.identity, ...limits, ...(hasPolicy ? { toolPolicy: policy } : {}),
-      ...(preparation.model.reasoningEffort === undefined ? {} : { reasoningEffort: preparation.model.reasoningEffort }) }))
+      ...(reasoning === undefined ? {} : { reasoning }) }))
     .digest("hex");
   const state = posix.join(stateRoot, identity.slice(0, 24));
   const env = {
@@ -396,7 +437,8 @@ export async function prepareJiuwenswarmDocker(
       )
     ).trim(),
   );
-  const mergedConfig = configureJiuwenswarmTools(mergeJiuwenswarmModelConfig(installedConfig, images, preparation.model.reasoningEffort, limits), preparation, root, false);
+  const mergedConfig = configureJiuwenswarmTools(
+    mergeJiuwenswarmModelConfig(installedConfig, images, reasoning, limits), preparation, root, false, session.solveNetwork);
   const configYaml = join(context.paths.agent, "jiuwenswarm-config.yaml");
   await mkdir(context.paths.agent, { recursive: true });
   await writeFile(configYaml, mergedConfig, { mode: 0o600 });
@@ -459,13 +501,13 @@ export async function prepareJiuwenswarmDocker(
             session.workdir,
             "--timeout",
             String(preparation.options.jiuwenswarmTimeoutSeconds ?? JIUWENSWARM_TIMEOUT_SECONDS),
+            ...(reasoning === undefined ? [] : [`--_model-selection=${reasoning.modelName}`]),
           ],
           cwd: session.workdir,
           env: {
             ...env,
             JIUWENSWARM_DATA_DIR: state,
             ...(hasPolicy ? { EVALUATOR_JIUWENSWARM_TOOL_POLICY: JSON.stringify(policy) } : {}),
-            ...(preparation.model.reasoningEffort === undefined ? {} : { EVALUATOR_REASONING_EFFORT: preparation.model.reasoningEffort }),
             API_BASE: apiBase,
             API_KEY: preparation.auth.value,
             MODEL_NAME: preparation.model.name,

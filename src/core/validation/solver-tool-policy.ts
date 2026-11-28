@@ -12,6 +12,7 @@ export type SolverToolPolicy = {
   webFetch?: WebToolMode;
 };
 export type WebToolNames = { webSearchTools?: string[]; webFetchTools?: string[] };
+export const PI_WEB_FETCH_TOOL_NAMES = ["web_fetch", "webfetch"] as const;
 export const SOLVER_TOOL_FIELDS = ["tools", "webSearch", "webFetch", "subagent", "mcp", "skills"] as const;
 
 export function parseSolverToolPolicy(
@@ -78,7 +79,7 @@ export function parseWebToolNames(value: Record<string, unknown>, path: string, 
   }
   if ((policy.webSearch === "enabled" && policy.webFetch === "disabled") ||
       (policy.webFetch === "enabled" && policy.webSearch === "disabled")) {
-    const fetch = result.webFetchTools ?? ["web_fetch"];
+    const fetch = [...PI_WEB_FETCH_TOOL_NAMES, ...(result.webFetchTools ?? [])];
     const shared = (result.webSearchTools ?? ["web_search"]).filter(name => fetch.includes(name));
     if (shared.length) unsupportedToolPolicy(path, `webSearch: ${policy.webSearch} conflicts with webFetch: ${policy.webFetch} because both use the same Pi tool: ${shared.join(", ")}.`);
   }

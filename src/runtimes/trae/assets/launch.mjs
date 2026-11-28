@@ -18,7 +18,7 @@ let relay;
 let resources;
 try {
   const policy = input.toolPolicy ?? {};
-  const env = { ...process.env, HOME: home, USERPROFILE: home, CODEX_HOME: home, TRAE_HOME: home, EVALUATOR_TRAE_API_KEY: apiKey };
+  const env = { ...process.env, HOME: home, USERPROFILE: home, CODEX_HOME: home, TRAE_HOME: home };
   const project = args.find(arg => arg.startsWith("projects="));
   const settings = project ? ["-c", project] : [];
   const configuredNames = () => configuredMcpNames(entry, [], env, settings);
@@ -34,12 +34,14 @@ try {
   const images = await stageAttachments(home, media);
   if (images.length) args.splice(-1, 0, ...images.map(path => `--image=${path}`));
   // Docker passes CommandSpec.env in docker exec arguments, so receive the key over stdin.
-  if (modelRelay || resources.completeSearch) {
+  if (modelRelay || resources.completeWebTools) {
     const token = randomUUID();
-    relay = await startModelRelay({ api: input.api, baseUrl: input.baseUrl, ...modelRelay, completeSearch: resources.completeSearch, apiKey, token });
+    relay = await startModelRelay({ api: input.api, baseUrl: input.baseUrl, ...modelRelay, disableWebFetch: input.toolPolicy?.webFetch === "disabled", completeWebTools: resources.completeWebTools, apiKey, token });
     args.splice(-1, 0, "-c", `model_providers.arsi-evaluator.base_url=${JSON.stringify(relay.endpoint)}`);
     env.EVALUATOR_TRAE_API_KEY = token;
     env.NO_PROXY = env.no_proxy = [env.NO_PROXY ?? env.no_proxy, "127.0.0.1"].filter(Boolean).join(",");
+  } else {
+    env.EVALUATOR_TRAE_API_KEY = apiKey;
   }
   if (process.platform === "linux") {
     env.PATH = [join(root, "traecli-resources"), process.env.PATH].filter(Boolean).join(delimiter);

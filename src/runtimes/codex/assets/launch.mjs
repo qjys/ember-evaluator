@@ -7,7 +7,6 @@ import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { mkdir, rm } from "node:fs/promises";
 import { stageAttachments } from "./stage-attachments.mjs";
-import { fetchWebPage } from "./web-fetch.mjs";
 
 const [home, entry, ...args] = process.argv.slice(2);
 const input = JSON.parse(readFileSync(0, "utf8"));
@@ -21,10 +20,7 @@ try {
   const project = args.find(arg => arg.startsWith("projects="));
   const settings = project ? ["-c", project] : [];
   const configuredNames = () => configuredMcpNames(process.execPath, [entry], env, settings);
-  const fetchAllowed = policy.tools !== "none" && policy.webFetch !== "disabled" && policy.mcp !== "disabled"
-    && input.fetchNetwork !== "model-api" && input.fetchNetwork !== "none";
-  resources = await taskServers({ ...input, exaOnly: policy.webFetch === "disabled" }, false,
-    fetchAllowed ? (url, signal) => fetchWebPage(url, input.fetchNetwork?.allowedHosts, signal) : undefined, configuredNames);
+  resources = await taskServers(input, false, undefined, configuredNames);
   for (const { name, url, transport } of resources.servers) {
     if (transport !== "http") throw Error("This CLI requires streamable HTTP for task MCP");
     if (!/^[a-zA-Z0-9_-]+$/u.test(name)) throw Error("Unsupported MCP server name: " + name);

@@ -8,6 +8,7 @@ import type { SolveResult } from "../../core/contracts/result.js";
 import type { AttemptContext, Solver, SolverProvenance } from "../../core/contracts/solver.js";
 import type { InputModality, PublicTask } from "../../core/contracts/task.js";
 import { EvaluatorError } from "../../core/errors/evaluator-error.js";
+import { normalizeAllowedHosts } from "../../core/policies/network-policy.js";
 import { sessionToolPolicy, toolPolicyProvenance, type SolverToolPolicy } from "../../core/validation/solver-tool-policy.js";
 import { loadAttachments, requireInputModalities } from "../../runtimes/multimodal/input.js";
 import { consumeNativeCode } from "../../runtimes/shared/native-code-protocol.js";
@@ -43,6 +44,9 @@ export class NativeCodeSolver implements Solver {
       throw new TypeError(`${name} requires api: openai-completions, openai-responses or anthropic-messages`);
     }
     if (model.retry !== undefined) throw new TypeError(`${name} does not support services.*.retry`);
+    if (name === "qwencode" && model.reasoningEffort === "minimal") {
+      throw new TypeError("Qwen Code does not offer reasoningEffort: minimal. Use low, medium, high, xhigh, or max.");
+    }
     this.endpoint = apiBase(model.endpoint);
   }
 
@@ -85,7 +89,9 @@ export class NativeCodeSolver implements Solver {
         env: { NODE_USE_ENV_PROXY: "1" },
         input: Buffer.from(JSON.stringify({ apiKey: auth.value, api: model.api, baseUrl, model: model.name,
           maxTokens: model.maxTokens, contextWindow: model.contextWindow, reasoningEffort: model.reasoningEffort,
-          toolPolicy: sessionToolPolicy(this.name, this.config, session), outputDir: session.agentOutputDir, skillsDirectories: input.skillsDirectories, mcpServers: input.mcpServers, maxTurns: this.config.maxTurns, prompt: input.prompt,
+          toolPolicy: sessionToolPolicy(this.name, this.config, session), outputDir: session.agentOutputDir, skillsDirectories: input.skillsDirectories, mcpServers: input.mcpServers,
+          fetchNetwork: typeof session.solveNetwork === "object"
+            ? { allowedHosts: normalizeAllowedHosts(session.solveNetwork.allowedHosts) } : session.solveNetwork ?? "bridge", maxTurns: this.config.maxTurns, prompt: input.prompt,
           supportsImages: model.inputModalities?.includes("image") ?? false,
           supportsPdf: this.inputModalities.includes("pdf") && (model.inputModalities?.includes("pdf") ?? false), token, media }), "utf8"),
       }, context.signal);

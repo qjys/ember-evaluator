@@ -115,7 +115,7 @@ export function dshOutputRuntimeFile(): { source: string; target: string } {
 }
 
 function searchFiles() {
-  return ["runtimes/dsh/assets/search.mjs", "infrastructure/network/web-search.mjs"].map(target => ({
+  return ["runtimes/dsh/assets/search.mjs", "infrastructure/network/web-search.mjs", "infrastructure/network/web-fetch.mjs"].map(target => ({
     source: fileURLToPath(new URL("../../" + target, import.meta.url)), target,
   }));
 }

@@ -53,7 +53,7 @@ await writeFile(new URL("../dist/runtimes/pi/runtime-lock.json", import.meta.url
 
 const root = new URL("../dist/runtimes/pi/", import.meta.url);
 await cp(new URL("../src/runtimes/pi/model-defaults.json", import.meta.url), new URL("model-defaults.json", root));
-for (const asset of ["infrastructure/models/reasoning-effort.mjs", "infrastructure/network/web-search.mjs"]) {
+for (const asset of ["infrastructure/models/reasoning-effort.mjs", "infrastructure/network/web-search.mjs", "infrastructure/network/web-fetch.mjs"]) {
   const output = new URL(`../dist/${asset}`, import.meta.url);
   await mkdir(dirname(fileURLToPath(output)), { recursive: true });
   await cp(new URL(`../src/${asset}`, import.meta.url), output);

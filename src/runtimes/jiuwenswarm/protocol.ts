@@ -315,11 +315,22 @@ export async function consumeJiuwenswarm(
     let usage: Usage | null = null;
     let pendingDeltas = "";
     let pendingFinal = "";
+    let pendingThinking = "";
     const flushText = async (): Promise<void> => {
       const value = assembleText(pendingDeltas, pendingFinal);
       if (value !== "") await trajectory.append("text", { text: redactText(value, secret) });
       pendingDeltas = "";
       pendingFinal = "";
+    };
+    const flushThinking = async (): Promise<void> => {
+      if (pendingThinking !== "") {
+        await trajectory.append("thinking", { text: redactText(pendingThinking, secret) });
+        pendingThinking = "";
+      }
+    };
+    const flushOutput = async (): Promise<void> => {
+      await flushText();
+      await flushThinking();
     };
     for (const raw of envelope.events) {
       const event = record(raw, "event");
@@ -329,23 +340,33 @@ export async function consumeJiuwenswarm(
         event.payload === null || event.payload === undefined ? {} : record(event.payload, "event.payload");
       if (typeof payload.event_type !== "string") continue;
       const eventType = payload.event_type;
-      if (eventType === "chat.delta") {
+      if (eventType === "chat.reasoning") {
         const value = text(payload);
-        deltas += value;
-        pendingDeltas += value;
+        if (value !== "") {
+          await flushText();
+          pendingThinking += value;
+        }
+      } else if (eventType === "chat.delta") {
+        const value = text(payload);
+        if (value !== "") {
+          await flushThinking();
+          deltas += value;
+          pendingDeltas += value;
+        }
       } else if (eventType === "chat.final") {
         const value = text(payload);
         if (value !== "") {
+          await flushThinking();
           final = value;
           pendingFinal = value;
         }
       } else if (eventType === "chat.tool_call" || eventType === "tool.use") {
         // Coalesce streaming text at tool boundaries so thousands of deltas do
         // not become redundant events or duplicate the eventual chat.final.
-        await flushText();
+        await flushOutput();
         await trajectory.append("tool_call", toolCallData(payload, secret));
       } else if (eventType === "chat.tool_result" || eventType === "tool.result") {
-        await flushText();
+        await flushOutput();
         await trajectory.append("tool_result", externalizeMedia(toolResultData(payload, secret), context.paths.agent));
       }
       if (eventType === "chat.usage_summary") {
@@ -363,6 +384,7 @@ export async function consumeJiuwenswarm(
           const warning = { code: failure.code,
             message: `${failure.message}; continuing evaluation with the actual output.` };
           context.warning?.(warning);
+          await flushOutput();
           await trajectory.append("warning", warning);
         } else {
           error ??= failure;
@@ -370,7 +392,7 @@ export async function consumeJiuwenswarm(
       }
     }
     // RSI's trajectory reader consumes data.text rather than end.finalText.
-    await flushText();
+    await flushOutput();
     if (!envelope.ok && error === undefined && !outputTruncated)
       error = new JiuwenswarmProtocolError("INTERNAL_ERROR", "jiuwenswarm reported an error: Runtime reported an unsuccessful completion");
     if (error !== undefined) throw error;

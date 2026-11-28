@@ -47,6 +47,11 @@ test.each(names)("%s binds service controls and does not pretend an unavailable 
   expect(() => new NativeCodeSolver(name, service, { webSearch: "enabled" })).not.toThrow();
 });
 
+test("Qwen Code rejects a service tier unavailable in its native effort selector", () => {
+  expect(() => new NativeCodeSolver("qwencode", { ...binding, model: { ...binding.model, reasoningEffort: "minimal" } }))
+    .toThrow(/Qwen Code does not offer reasoningEffort: minimal/u);
+});
+
 async function context(): Promise<AttemptContext> {
   const root = await mkdtemp(join(tmpdir(), "native-code-protocol-"));
   roots.push(root);

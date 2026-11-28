@@ -1,16 +1,20 @@
 import { createInterface } from "node:readline";
 import { once } from "node:events";
 
-import { searchWeb, startSearchMcp } from "../../../infrastructure/network/web-search.mjs";
+import { fetchWeb, searchWeb, startSearchMcp } from "../../../infrastructure/network/web-search.mjs";
 import { text } from "node:stream/consumers";
 
-const [mode, api, baseUrl, model, keyVariable] = process.argv.slice(2);
-const service = { api, baseUrl, model, apiKey: process.env[keyVariable] };
-if (mode === "--query") {
-  const result = await searchWeb(await text(process.stdin), service, AbortSignal.timeout(125_000));
+const [mode, config] = process.argv.slice(2);
+if (mode === "--fetch") {
+  const result = await fetchWeb(await text(process.stdin), JSON.parse(config ?? "{}").allowedHosts, AbortSignal.timeout(95_000));
+  process.stdout.write(JSON.stringify(result));
+} else if (mode === "--query") {
+  const result = await searchWeb(await text(process.stdin), AbortSignal.timeout(65_000));
   process.stdout.write(JSON.stringify(result));
 } else {
-  const backend = mode === "--serve" ? await startSearchMcp(service) : undefined;
+  const tools = mode === "--serve" && config ? JSON.parse(config) : {};
+  const backend = mode === "--serve" ? await startSearchMcp({ webSearch: tools.search === false ? "disabled" : undefined },
+    undefined, tools.fetch ? (url, signal) => fetchWeb(url, tools.allowedHosts, signal) : undefined) : undefined;
   try {
     await forward(backend?.url ?? mode);
   } finally {

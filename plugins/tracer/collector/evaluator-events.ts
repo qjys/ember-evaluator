@@ -232,24 +232,36 @@ export function stepsFromEvents(
         }
       }
       // role == "toolResult" duplicates the tool_result event, skip it.
-    } else if (typ === "tool_start") {
-      const callId = data.id;
-      const name = data.name || "tool";
+    } else if (typ === "thinking") {
+      const reasoning = clip(data.text, textLimit);
+      if (reasoning) {
+        const step = makeStep(steps.length + 1, "agent", LLM_FUNCTION, "", at, at, { timestamp: row.at });
+        step.reasoning_content = reasoning;
+        steps.push(step);
+      }
+    } else if (typ === "tool_start" || typ === "tool_call") {
+      const callId = data.id ?? data.callId;
+      const name = String(data.name || data.tool || "tool");
+      const toolCalls = typ === "tool_call" ? [{ id: callId, function_name: name, arguments: data.input }] : null;
       const index = steps.length + 1;
       steps.push(
-        makeStep(index, "system", String(name), "", at, null, {
+        makeStep(index, "system", name, "", at, null, {
           timestamp: row.at,
           status: "incomplete",
           parentId: llmStepOf.get(callId) ?? null,
+          toolCalls,
         }),
       );
       if (callId !== undefined && callId !== null) pending.set(callId, index - 1);
     } else if (typ === "tool_result") {
-      const callId = data.id;
-      const name = data.name || "tool";
-      const result = asObject(data.result);
-      const text = clip(textOf(result.content), observationLimit);
-      const failed = data.isError === true;
+      const callId = data.id ?? data.callId;
+      const name = data.name || data.tool || "tool";
+      const result = data.result;
+      const content = typeof data.tool === "string"
+        ? (typeof result === "string" ? result : JSON.stringify(result ?? ""))
+        : textOf(asObject(result).content);
+      const text = clip(content, observationLimit);
+      const failed = data.isError === true || data.status === "error";
       const index = pending.get(callId);
       pending.delete(callId);
       if (index === undefined) {

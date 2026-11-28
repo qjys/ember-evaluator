@@ -142,13 +142,11 @@ services:
     reasoningEffort: max
 ```
 
-Accepted values are `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`. The explicit value overrides the Agent or bundle's default effort on each model request. Omission preserves the existing Agent and service defaults. The selected model service must support the requested level. Unsupported values are reported by the service without silently reducing the effort. Messages does not accept `minimal`.
+Accepted values are `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`. An explicit value sets the main agent's effort through the selected harness. The harness determines supported levels, wire encoding and whether secondary requests inherit the setting. Omission preserves the agent and service defaults. The setting is recorded in resolved configuration, exports and resume fingerprints.
 
-SimpleAgent and Pi apply the value through their model request hook. DSH selects the effort and declares its exact wire mapping in the model patch. JiuwenSwarm replaces the installed model request default and enforces it in its SDK requests. Codex uses native `model_reasoning_effort`. Claude Code and CodeBuddy use native `--effort` plus their existing model relay. ZCode uses its model relay. TRAE uses native configuration for Chat Completions and a model relay for Responses and Messages.
+SimpleAgent and Pi set the session's `thinkingLevel`. JiuwenSwarm applies `reasoning_level` to the selected model preset. Hermes uses native `--reasoning`. DeepAgents passes `reasoning_effort` to a supporting `build_agent_for_run` factory, which can construct separate models for the main graph and subagents. See [Solver configuration](solvers.md) for native CLI settings and adapter limits.
 
-Chat Completions receives `reasoning_effort`, Responses receives `reasoning.effort`, and Messages receives `output_config.effort` with adaptive thinking. Other request fields, including output format and reasoning summary, are retained. Explicit effort is also saved in the resolved configuration, exports, and resume fingerprint. A judge uses the value from its own selected service.
-
-DeepAgents and Hermes apply Chat Completions effort to synchronous and asynchronous SDK calls for the selected model. Hermes also receives native `--reasoning`. AgentX records the value in its extra inputs and reapplies it after each worker assembles its payload, covering source traces with a different effort. Dify requires a separate workflow publishing implementation and rejects an explicit service override.
+A judge uses its own selected service. AgentX applies the value when replay workers assemble their requests and can override an effort captured in a trace. Dify requires a separate workflow publishing implementation and rejects an explicit service override.
 
 When the service is a protocol-converting gateway such as LiteLLM, inspect its upstream request as well. The gateway owns conversion from the configured service protocol to the provider protocol.
 

@@ -8,10 +8,12 @@ import type { SolveResult } from "../../core/contracts/result.js";
 import type { AttemptContext, Solver, SolverProvenance } from "../../core/contracts/solver.js";
 import type { PublicTask } from "../../core/contracts/task.js";
 import { EvaluatorError } from "../../core/errors/evaluator-error.js";
+import { normalizeAllowedHosts } from "../../core/policies/network-policy.js";
 import { sessionToolPolicy, toolPolicyProvenance, type SolverToolPolicy } from "../../core/validation/solver-tool-policy.js";
 import { consumeClaudeCode } from "../../runtimes/claudecode/protocol.js";
 import { CLAUDE_CODE_ENTRY, CLAUDE_CODE_VERSION, claudeCodeRuntimeInstallation } from "../../runtimes/claudecode/runtime.js";
 import { loadAttachments, requireInputModalities } from "../../runtimes/multimodal/input.js";
+import { record } from "../../runtimes/shared/cli-jsonl.js";
 
 export function parseClaudeCodeConfig(value: unknown): SolverToolPolicy & AgentLimits {
   return parseAgentOptions(value, "claudecode");
@@ -93,11 +95,14 @@ export class ClaudeCodeSolver implements Solver {
           ...(none ? ["--tools", ""] : []),
           ...(policy.skills === "disabled" ? ["--disable-slash-commands"] : []),
           ...(policy.mcp === "disabled" ? ["--strict-mcp-config"] : []),
-          ...(denied.length ? ["--disallowedTools", ...denied] : []), "--model", model.name],
+          ...(denied.length ? ["--disallowedTools", ...denied] : [])],
         cwd: session.workdir,
         env: gitBash === undefined ? {} : { CLAUDE_CODE_GIT_BASH_PATH: gitBash },
         inheritEnv: false,
         input: Buffer.from(JSON.stringify({ toolPolicy: policy, outputDir: session.agentOutputDir, skillsDirectories: input.skillsDirectories, mcpServers: input.mcpServers,
+          fetchNetwork: typeof session.solveNetwork === "object"
+            ? { allowedHosts: normalizeAllowedHosts(session.solveNetwork.allowedHosts) } : session.solveNetwork ?? "bridge",
+          docker: record(session.metadata)?.kind === "docker",
           apiKey: auth.value, prompt: input.prompt, api: model.api, baseUrl, model: model.name,
           maxTokens: model.maxTokens, contextWindow: model.contextWindow, reasoningEffort: model.reasoningEffort, media }), "utf8"),
       }, signal);

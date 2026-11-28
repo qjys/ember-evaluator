@@ -29,7 +29,7 @@ await launchCodeCli({
           modalities: { input: supportsImages ? ["text", "image"] : ["text"], output: ["text"] },
           limit: { context: contextWindow ?? 200000, output: maxTokens ?? 16384 },
           ...(reasoningEffort === undefined ? {} : { reasoning: true, thinking: {
-            effortOptions: [reasoningEffort], defaultEffort: reasoningEffort } }),
+            effortOptions: ["default", reasoningEffort], defaultEffort: "default" } }),
       } } } }, defaultModel: `custom_provider:evaluator/${model}`, defaultLightModel: `custom_provider:evaluator/${model}`,
       agents: { default: {
         ...(toolPolicy.skills === "disabled" ? { skills: [] } : {}),

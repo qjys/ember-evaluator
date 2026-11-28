@@ -1,8 +1,10 @@
-import asyncio
 import importlib.util
+import json
 import os
+import subprocess
 from pathlib import Path
 import sys
+from tempfile import TemporaryDirectory
 import types
 
 root = Path(sys.argv[1])
@@ -24,31 +26,6 @@ assert source["reasoning_effort"] == "high"
 assert source["thinking"]["type"] == "disabled"
 
 
-class Completions:
-    def create(self, **kwargs):
-        return kwargs
-
-
-class AsyncCompletions:
-    async def create(self, **kwargs):
-        return kwargs
-
-
-sdk = types.ModuleType("openai.resources.chat.completions")
-sdk.Completions = Completions
-sdk.AsyncCompletions = AsyncCompletions
-sys.modules["openai.resources.chat.completions"] = sdk
-helper.install_openai_reasoning_effort("low", "target")
-for result in (
-    Completions().create(model="target", reasoning_effort="high", extra_body=source),
-    asyncio.run(AsyncCompletions().create(model="target", reasoning_effort="max", extra_body=source)),
-):
-    assert result["reasoning_effort"] == "low"
-    assert result["extra_body"]["reasoning_effort"] == "low"
-    assert result["extra_body"]["thinking"]["type"] == "enabled"
-assert Completions().create(model="other", reasoning_effort="high")["reasoning_effort"] == "high"
-
-
 class ChatEndpoint:
     def format_payload(self, request):
         return request
@@ -62,4 +39,35 @@ os.environ["EVALUATOR_AGENTX_REASONING_EFFORT"] = "low"
 load("controlled_agentx_startup", root / "src/runtimes/agentx/assets/sitecustomize.py")
 assert ChatEndpoint().format_payload(source)["reasoning_effort"] == "low"
 assert source["reasoning_effort"] == "high"
+
+runner = root / "src/runtimes/deepagents/assets/runner.py"
+with TemporaryDirectory() as directory:
+    factory = Path(directory) / "agent.py"
+    factory.write_text("""
+class Message:
+    type = "ai"
+    content = "complete"
+
+
+class Graph:
+    def invoke(self, state):
+        return {"messages": [Message()]}
+
+
+def build_agent_for_run(*, policy, mcp_servers, skills_directories, tools, middleware, reasoning_effort=None):
+    assert reasoning_effort == "max", reasoning_effort
+    return Graph()
+""", encoding="utf-8")
+    command = [sys.executable, str(runner), "--bundle-dir", directory, "--factory-module", "agent.py"]
+    result = subprocess.run(command, input=json.dumps({"prompt": "hello", "reasoningEffort": "max"}),
+                            text=True, capture_output=True, check=True)
+    assert json.loads(result.stdout.splitlines()[-1]) == {"type": "final", "text": "complete"}
+    factory.write_text(factory.read_text(encoding="utf-8")
+                       .replace(", reasoning_effort=None", "")
+                       .replace('    assert reasoning_effort == "max", reasoning_effort\n', ""), encoding="utf-8")
+    result = subprocess.run(command, input=json.dumps({"prompt": "hello", "reasoningEffort": "max"}),
+                            text=True, capture_output=True, check=False)
+    assert result.returncode == 1
+    assert "must accept reasoning_effort" in json.loads(result.stdout.splitlines()[-1])["message"]
+    subprocess.run(command, input=json.dumps({"prompt": "hello"}), text=True, capture_output=True, check=True)
 print("Python reasoning overrides passed")

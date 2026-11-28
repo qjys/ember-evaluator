@@ -104,11 +104,19 @@ test("TRAE validates the service and allows preparation without credentials", as
   await expect(new TraeSolver(binding).runtimeInstallation(AbortSignal.timeout(5000))).resolves.toMatchObject({ id: "trae:0.214.1" });
 });
 
+test.each(["openai-responses", "anthropic-messages"])("TRAE rejects a configured reasoning effort on %s", api => {
+  expect(() => new TraeSolver({
+    model: { name: "fixture", endpoint: "http://127.0.0.1:1234/v1", provider: null, api, reasoningEffort: "max" },
+    auth: { value: secret, reference: null },
+  })).toThrow(/native reasoningEffort only with api: openai-completions/u);
+});
+
 test.each([
-  ["openai-responses", "responses"],
-  ["openai-completions", "chat_completions"],
-  ["anthropic-messages", "anthropic_messages"],
-])("TRAE launches with the wire protocol for %s", async (api, wireApi) => {
+  ["openai-responses", "responses", undefined],
+  ["openai-completions", "chat_completions", undefined],
+  ["openai-completions", "chat_completions", "disabled"],
+  ["anthropic-messages", "anthropic_messages", undefined],
+])("TRAE launches with the wire protocol for %s", async (api, wireApi, webSearch) => {
   const endpoint = "http://127.0.0.1:1234/v1";
   const start = vi.fn(async (_command: CommandSpec) => processWith(chunks(jsonl(message("answer"), complete))));
   const session: EnvironmentSession = {
@@ -118,11 +126,22 @@ test.each([
     start, upload: vi.fn(), download: vi.fn(), exportState: vi.fn(), restoreState: vi.fn(), dispose: vi.fn(),
   };
   const solver = new TraeSolver({
-    model: { name: "fixture", endpoint, provider: null, api }, auth: { value: secret, reference: null },
-  });
+    model: { name: "fixture", endpoint, provider: null, api,
+      ...(api === "openai-completions" ? { reasoningEffort: "max" } : {}) }, auth: { value: secret, reference: null },
+  }, webSearch === "disabled" ? { webSearch } : {});
   await expect(solver.solve({ id: "task", prompt: "Find the answer" }, session, await attempt()))
     .resolves.toMatchObject({ finalText: "answer" });
   const command = start.mock.calls[0]?.[0];
   expect(command?.args).toContain(`model_providers.arsi-evaluator.wire_api="${wireApi}"`);
-  expect(command?.args).toContain('model_providers.arsi-evaluator.base_url="http://127.0.0.1:4321/v1"');
+  if (api === "openai-completions") expect(command?.args).toContain('model_reasoning_effort="max"');
+  if (api === "anthropic-messages" || webSearch === "disabled") {
+    if (!command?.input) throw Error("Missing TRAE launch input");
+    expect(JSON.parse(Buffer.from(command.input).toString("utf8"))).toMatchObject({
+      baseUrl: "http://127.0.0.1:4321/v1",
+      relay: { disableHostedSearch: webSearch === "disabled", disableBuiltinTools: false, disableMcp: false },
+    });
+    expect(command.args.some(arg => arg.startsWith("model_providers.arsi-evaluator.base_url="))).toBe(false);
+  } else {
+    expect(command?.args).toContain('model_providers.arsi-evaluator.base_url="http://127.0.0.1:4321/v1"');
+  }
 });

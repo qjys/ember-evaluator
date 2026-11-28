@@ -111,7 +111,6 @@ export async function deepagentsRuntimeInstallation(signal: AbortSignal): Promis
     ...agentBundleFiles,
     ...bundleSearchFiles(),
     { source: deepagentsRunner, target: "deepagents/runner.py" },
-    { source: fileURLToPath(new URL("../shared/assets/reasoning_effort.py", import.meta.url)), target: "deepagents/reasoning_effort.py" },
     { source: deepagentsConstraints, target: "deepagents/constraints.txt" },
   ];
   const pythonProbe =
@@ -240,7 +239,6 @@ export async function deepagentsDockerRuntimeInstallation(
     ...agentBundleFiles,
     ...bundleSearchFiles(),
     { source: deepagentsRunner, target: "deepagents/runner.py" },
-    { source: fileURLToPath(new URL("../shared/assets/reasoning_effort.py", import.meta.url)), target: "deepagents/reasoning_effort.py" },
     { source: deepagentsConstraints, target: "deepagents/constraints.txt" },
     { source: uv.path, target: DEEPAGENTS_DOCKER_UV_TARGET },
     { source: bundleDir, target: DEEPAGENTS_DOCKER_BUNDLE_TARGET },

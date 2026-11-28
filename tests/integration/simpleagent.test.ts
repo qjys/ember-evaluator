@@ -419,23 +419,29 @@ describe("simpleagent runner", () => {
     } finally { await session.dispose(new AbortController().signal); }
   }, 35_000);
 
-  test("plain Pi diagnoses missing capabilities before the first model request", async () => {
+  test("plain Pi offers direct fetch with MCP off and enforces the task allowlist", async () => {
     const attemptPaths = await paths("plain-pi-capabilities");
     const workspace = join(root, "plain-pi-workspace");
     await mkdir(workspace);
     const model = { name: "fixture-model", endpoint, provider: null, api: "openai-completions" };
     const auth = { value: "key-plain-pi-capabilities", reference: null };
-    const solver = new SimpleAgentSolver(model, auth, undefined, undefined, { webFetch: "enabled", subagent: "disabled" });
+    const solver = new SimpleAgentSolver(model, auth, undefined, undefined, { webFetch: "enabled", webSearch: "disabled", mcp: "disabled", subagent: "disabled" });
     const warnings: string[] = [];
     const context = { paths: attemptPaths, key: { runId: "run", taskId: "caps", attemptId: "a" },
       signal: AbortSignal.timeout(25000), warning: ({ message }: { message: string }) => warnings.push(message) };
     const { session, prepared } = await prepareSimpleAgent(new LocalEnvironment(workspace), solver, attemptPaths, context);
     try {
-      await expect(prepared.solve({ id: "caps", prompt: "Fetch the page." }, context)).rejects.toMatchObject({
-        code: "CONFIG_INVALID", message: expect.stringMatching(/simpleagent.*webFetch: enabled requires tool web_fetch/u),
-      });
+      Object.defineProperty(session, "solveNetwork", { value: { kind: "allowlist", allowedHosts: ["example.org"] } });
+      await prepared.solve({ id: "caps", prompt: "call web_fetch https://example.com/" }, context);
+      const requests = (await readFile(statePath, "utf8")).trim().split("\n").map(line => JSON.parse(line))
+        .filter(request => request.authorization === "Bearer " + auth.value);
+      const names = requests[0]?.body.tools.map((tool: { function: { name: string } }) => tool.function.name);
+      expect(names).toContain("web_fetch");
+      expect(names).not.toContain("web_search");
+      expect(requests[1]?.body.messages).toContainEqual(expect.objectContaining({
+        role: "tool", content: expect.stringContaining("outside the task network allowlist"),
+      }));
       expect(warnings).toContainEqual(expect.stringMatching(/simpleagent.*subagent: disabled.*no built-in/u));
-      expect(await readFile(statePath, "utf8").catch(() => "")).not.toContain(auth.value);
     } finally {
       await session.dispose(new AbortController().signal);
     }
@@ -761,6 +767,55 @@ describe("simpleagent bundle", () => {
     expect(requests.length).toBeGreaterThan(0);
     expect(JSON.stringify(requests)).toContain("AGENTBUNDLE_PI_INSTRUCTIONS");
     expect(JSON.stringify(requests)).toContain("demo_bundle_echo");
+  }, 30_000);
+
+  test.each([
+    { name: "webfetch", policy: "enabled", expected: "web_fetch" },
+    { name: "bundle_fetch", policy: "enabled", expected: "web_fetch" },
+    { name: "web_fetch", policy: undefined, expected: "web_fetch" },
+    { name: "web_fetch", policy: "enabled", expected: "web_fetch" },
+    { name: undefined, policy: "enabled", expected: "web_fetch" },
+    { name: "webfetch", policy: "disabled", expected: undefined },
+    { name: undefined, policy: undefined, expected: undefined },
+  ] as const)("Pi Bundle web fetch selects $expected when $name is registered and policy is $policy", async ({ name, policy, expected }) => {
+    await stubWindowsShell();
+    const label = `bundle-fetch-${name}-${policy}`;
+    const attemptPaths = await paths(label);
+    const agentDir = await mkdtemp(join(root, "pi-web-"));
+    const extension = join(agentDir, "web-test.mjs");
+    await writeFile(join(agentDir, "AGENTS.md"), "Test instructions\n");
+    await writeFile(join(agentDir, "settings.json"), JSON.stringify({ extensions: [extension] }));
+    await writeFile(extension, name === undefined ? "export default () => {};" : `
+      export default pi => pi.on("before_agent_start", () => {
+        pi.registerTool({
+          name: ${JSON.stringify(name)},
+          label: "Bundle fetch",
+          description: "Bundle-provided fetch tool.",
+          parameters: { type: "object" },
+          execute: async () => ({ content: [{ type: "text", text: "Bundle result" }] }),
+        });
+      });
+    `);
+    const input = projectRunnerInput({ key: { runId: "run", taskId: label, attemptId: "one" },
+      input: { id: label, prompt: "complete alpha" },
+      toolAccess: { webSearch: "disabled", mcp: "disabled", ...(policy === undefined ? {} : { webFetch: policy }),
+        ...(name === "bundle_fetch" ? { webFetchTools: [name] } : {}) },
+      ...(policy === "enabled" ? { supplementaryFetch: {} } : {}),
+      model: { name: "fixture-model", endpoint, provider: null, api: "openai-completions" },
+      auth: { value: `key-${label}`, reference: null }, workdir: root, outputDir: attemptPaths.agent, piConfigDir: agentDir });
+    expect((await run(input)).finalText).toBe("Answer: alpha");
+    const requests = (await readFile(statePath, "utf8")).trim().split("\n").map(line => JSON.parse(line))
+      .filter(request => request.authorization === `Bearer key-${label}`);
+    expect(requests).toHaveLength(2);
+    for (const request of requests) {
+      const tools = request.body.tools.map((tool: { function: { name: string; description: string } }) => tool.function);
+      expect(tools.find((tool: { name: string }) => tool.name === "web_search")).toBeUndefined();
+      const fetchTools = tools.filter((tool: { name: string }) => ["webfetch", "bundle_fetch", "web_fetch"].includes(tool.name));
+      expect(fetchTools.map((tool: { name: string }) => tool.name)).toEqual(expected === undefined ? [] : [expected]);
+      if (expected === "web_fetch") expect(fetchTools[0]?.description).toBe(policy === "enabled"
+        ? "Read the body of a public web page by URL."
+        : "Bundle-provided fetch tool.");
+    }
   }, 30_000);
 
   test("tools: none keeps a task MCP web alias callable and closes the connection", async () => {
