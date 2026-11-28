@@ -142,7 +142,7 @@ export function renderAgentXTables(value: JsonValue | undefined): string[] {
   const summaries = metric.points.map(value => {
     const point = expectRecord(value, "AgentX report point");
     const summary = point.measurement === null ? null : parseAgentXSummary(point.measurement);
-    if (!diagnosticOnly(point)) lines.push(`| ${escape(String(point.taskId))} | ${escape(String(point.status))} | ${summary?.workload.concurrency ?? "—"} | ${summary ? `${summary.workload.mode} / ${summary.workload.variant}` : "—"} | ${summary?.upstreamSubmissionValid ?? "—"} | ${summary?.comparable ?? "—"} | ${number(summary?.profiling.requests?.mean)} / ${number(summary?.profiling.errors?.mean)} | ${number(summary?.profiling.duration?.mean)} |`);
+    if (!diagnosticOnly(point)) lines.push(`| ${escape(String(point.taskId))} | ${escape(String(point.status))} | ${summary?.measuredConcurrency ?? summary?.workload.concurrency ?? "—"} | ${summary ? `${summary.workload.mode} / ${summary.workload.variant}` : "—"} | ${summary?.upstreamSubmissionValid ?? "—"} | ${summary?.comparable ?? "—"} | ${number(summary?.profiling.requests?.mean)} / ${number(summary?.profiling.errors?.mean)} | ${number(summary?.profiling.duration?.mean)} |`);
     return { taskId: String(point.taskId), summary, collections: point.collections };
   });
   if (hasPerformance) lines.push("", metric.points.length > 1 ? "### 并发点性能对比" : "### 测量点性能", "",
@@ -151,7 +151,7 @@ export function renderAgentXTables(value: JsonValue | undefined): string[] {
   for (const { taskId, summary } of summaries) {
     if (!hasPerformance) continue;
     const stats = summary?.profiling;
-    lines.push(`| ${escape(taskId)} | ${summary?.workload.concurrency ?? "—"} | ${number(stats?.outputThroughput?.mean)} | ${number(stats?.totalThroughput?.mean)} | ${number(stats?.ttft?.p50)} / ${number(stats?.ttft?.p95)} | ${number(stats?.itl?.p50)} / ${number(stats?.itl?.p95)} | ${number(stats?.requestLatency?.p95)} | ${number(stats?.tpot?.p50)} / ${number(stats?.tpot?.p95)} | ${number(stats?.requestThroughput?.mean)} |`);
+    lines.push(`| ${escape(taskId)} | ${summary?.measuredConcurrency ?? summary?.workload.concurrency ?? "—"} | ${number(stats?.outputThroughput?.mean)} | ${number(stats?.totalThroughput?.mean)} | ${number(stats?.ttft?.p50)} / ${number(stats?.ttft?.p95)} | ${number(stats?.itl?.p50)} / ${number(stats?.itl?.p95)} | ${number(stats?.requestLatency?.p95)} | ${number(stats?.tpot?.p50)} / ${number(stats?.tpot?.p95)} | ${number(stats?.requestThroughput?.mean)} |`);
   }
   const labels: Record<string, string> = { ttft: "TTFT", tpot: "TPOT", requestThroughput: "请求吞吐", itl: "ITL", requestLatency: "请求延迟",
     inputThroughput: "输入吞吐", outputThroughput: "输出吞吐", totalThroughput: "总 token 吞吐",

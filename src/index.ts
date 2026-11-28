@@ -1,4 +1,8 @@
 export type * from "./core/contracts/hardware.js";
+export { nativeArguments, aisbenchManagedArgs } from "./core/validation/native-args.js";
+export { serviceDiagnosticSection } from "./plugins/metrics/agentx-measurement-files.js";
+export { captureServiceProfile } from "./runtimes/agentx/service-profile.js";
+export { serviceProfileMeasurements, collectionEvidence as validateServiceEvidence, parseProfileConfig as parseServiceProfile, type AgentXProfileConfig as ServiceProfileConfig } from "./plugins/benchmarks/inference-engine/shared/service-collections.js";
 export type * from "./core/contracts/task.js";
 export { parseTaskAttachments, parseInputModalities } from "./core/validation/multimodal.js";
 export type * from "./core/contracts/result.js";

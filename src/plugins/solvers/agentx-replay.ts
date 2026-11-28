@@ -1,3 +1,5 @@
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join, posix } from "node:path";
 import { expectNonEmptyString, expectPositiveNumber, expectRecord, rejectUnknown } from "../../core/validation/input.js";
@@ -6,19 +8,20 @@ import type { SolveResult } from "../../core/contracts/result.js";
 import type { AttemptContext, PreparedSolver, Solver, SolverProvenance } from "../../core/contracts/solver.js";
 import type { PublicTask } from "../../core/contracts/task.js";
 import { bindService, bindSolverService, type ServiceBinding, type PluginFactoryContext } from "../../core/contracts/plugin.js";
-import { captureAgentXProfile } from "../../runtimes/agentx/service-profile.js";
-import { collectionEvidence } from "../benchmarks/inference-engine/agentx/evidence/service-collections.js";
+import { captureServiceProfile } from "../../runtimes/agentx/service-profile.js";
+import { collectionEvidence } from "../benchmarks/inference-engine/shared/service-collections.js";
 import { dockerHostModelEndpoint } from "../../infrastructure/network/model-gateway.js";
 import { redactDiagnostic } from "../../core/errors/diagnostics.js";
 import { StringDecoder } from "node:string_decoder";
 import { AGENTX_VERSION } from "../../runtimes/agentx/versions.js";
 import { agentXUsage, successfulAgentXWindow, normalizeAgentXExport, parseWorkload, type AgentXSummary } from "../benchmarks/inference-engine/agentx/evidence/summary.js";
 import { normalizeTelemetry, parseTelemetryConfig, type AgentXTelemetryConfig } from "../benchmarks/inference-engine/agentx/evidence/telemetry.js";
-import { agentXBridgeDigest, agentXLocalInstallation, lockAgentXLexicon, resolveAgentXPython, type AgentXLexicon } from "../../runtimes/agentx/runtime.js";
+import { agentXAssets, agentXBridgeDigest, agentXLocalInstallation, lockAgentXLexicon, resolveAgentXPython, type AgentXLexicon } from "../../runtimes/agentx/runtime.js";
 import { startHostTelemetry, type HostNpuSampling } from "../../runtimes/agentx/host-telemetry.js";
 import { parseNetworkLatencyConfig, type AgentXNetworkLatencyConfig } from "../benchmarks/inference-engine/agentx/evidence/network-latency.js";
 
 export type AgentXReplayConfig = {
+  loadNode?: string;
   tokenizer?: string;
   tokenizerRevision?: string;
   trustRemoteCode: boolean;
@@ -31,9 +34,12 @@ export type AgentXReplayConfig = {
 
 export function parseAgentXReplayConfig(value: unknown): AgentXReplayConfig {
   const v = expectRecord(value, "agentx-replay");
-  rejectUnknown(v, ["tokenizer", "tokenizerRevision", "trustRemoteCode", "pythonExecutable", "cacheDir", "requestTimeoutSeconds", "telemetry", "networkLatency"], "agentx-replay");
+  rejectUnknown(v, ["loadNode", "tokenizer", "tokenizerRevision", "trustRemoteCode", "pythonExecutable", "cacheDir", "requestTimeoutSeconds", "telemetry", "networkLatency"], "agentx-replay");
   if (v.trustRemoteCode !== undefined && typeof v.trustRemoteCode !== "boolean") throw new TypeError("agentx-replay.trustRemoteCode must be boolean");
-  return { trustRemoteCode: v.trustRemoteCode === true,
+  if (v.loadNode !== undefined && (typeof v.loadNode !== "string" || !/^[A-Za-z0-9][A-Za-z0-9.@_-]*$/u.test(v.loadNode) ||
+      typeof v.tokenizer !== "string" || !posix.isAbsolute(v.tokenizer) || v.tokenizerRevision !== undefined))
+    throw new TypeError("agentx.loadNode requires an SSH alias and an absolute tokenizer directory on the load node");
+  return { ...(typeof v.loadNode === "string" ? { loadNode: v.loadNode } : {}), trustRemoteCode: v.trustRemoteCode === true,
     cacheDir: expectNonEmptyString(v.cacheDir ?? ".cache/agentx", "agentx-replay.cacheDir"),
     ...(v.telemetry === undefined ? {} : { telemetry: parseTelemetryConfig(v.telemetry) }),
     ...(v.networkLatency === undefined ? {} : { networkLatency: parseNetworkLatencyConfig(v.networkLatency) }),
@@ -66,6 +72,7 @@ export class AgentXReplaySolver implements Solver {
   readonly runtimeInstallation?: (signal: AbortSignal) => Promise<RuntimeInstallation>;
   private readonly binding: ServiceBinding;
   private lexicon: Promise<AgentXLexicon> | undefined;
+  private loadPythonVersion?: string;
   constructor(private readonly config: AgentXReplayConfig, private readonly runtime: PluginFactoryContext) {
     if (config.telemetry) parseTelemetryConfig(config.telemetry, runtime.hardware);
     this.binding = bindSolverService(runtime);
@@ -74,25 +81,45 @@ export class AgentXReplaySolver implements Solver {
     if (this.binding.model.endpoint === null || this.binding.model.api !== "openai-completions")
       throw new TypeError("agentx-replay requires OpenAI Chat Completions");
     agentXEndpoint(this.binding.model.endpoint);
-    if (runtime.environmentName === "local")
+    if (config.loadNode && runtime.environmentName !== "local") throw new TypeError("AgentX SSH uses the local coordinator environment");
+    if (config.loadNode && config.telemetry?.ascend && "mode" in config.telemetry.ascend)
+      throw new TypeError("Select a serving node for profiling instead of coordinator NPU telemetry");
+    if (runtime.environmentName === "local" && !config.loadNode)
       this.runtimeInstallation = signal => agentXLocalInstallation(config.pythonExecutable, signal);
   }
   requirements(): RuntimeRequirement[] { return []; }
 
   private vocabulary(signal: AbortSignal, previous?: SolverProvenance): Promise<AgentXLexicon> {
+    if (this.config.loadNode) return this.lexicon ??= this.remoteVocabulary(this.config.loadNode, signal);
     return this.lexicon ??= lockAgentXLexicon(this.config.tokenizer ?? this.binding.model.name, this.config.tokenizerRevision,
       this.runtime.resolvePath(this.config.cacheDir), this.runtime.resolvePath, signal, previous, this.runtime.network);
   }
 
+  private async remoteVocabulary(node: string, signal: AbortSignal): Promise<AgentXLexicon> {
+    const python = await resolveAgentXPython(undefined, signal);
+    const path = expectNonEmptyString(this.config.tokenizer, "AgentX load-node tokenizer");
+    const { stdout } = await promisify(execFile)(python.executable, ["-B", join(agentXAssets, "load_node.py"),
+      "identify", node, this.config.pythonExecutable ?? "python3", path], { signal, timeout: 120000, windowsHide: true });
+    const result = expectRecord(JSON.parse(stdout), "AgentX load-node identity");
+    const digest = expectNonEmptyString(result.digest, "tokenizer digest");
+    if (!/^[a-f0-9]{64}$/u.test(digest)) throw new TypeError("Invalid load-node tokenizer digest");
+    this.loadPythonVersion = expectNonEmptyString(result.version, "load-node Python version");
+    return { source: "local:" + digest, revision: "local", digest, path };
+  }
+
   async provenance(signal: AbortSignal, previous?: SolverProvenance): Promise<SolverProvenance> {
     const lexicon = await this.vocabulary(signal, previous);
-    const pythonVersion = this.runtime.environmentName === "local" ? (await resolveAgentXPython(this.config.pythonExecutable, signal)).version : "3.12.14";
+    const pythonVersion = this.loadPythonVersion ?? (this.runtime.environmentName === "local" ? (await resolveAgentXPython(this.config.pythonExecutable, signal)).version : "3.12.14");
     return { harnessVersion: AGENTX_VERSION, bridgeDigest: await agentXBridgeDigest(signal), pythonVersion,
       lexiconSource: lexicon.source, lexiconRevision: lexicon.revision, lexiconDigest: lexicon.digest };
   }
 
   async prepare(session: EnvironmentSession, context: AttemptContext): Promise<PreparedSolver> {
     const lexicon = await this.vocabulary(context.signal);
+    if (this.config.loadNode) {
+      const python = await resolveAgentXPython(undefined, context.signal);
+      return { solve: (input, active) => this.execute(input, session, python.executable, join(agentXAssets, "load_node.py"), lexicon, active) };
+    }
     await session.upload(lexicon.path, "agentx-tokenizer", context.signal);
     const local = this.runtime.environmentName === "local";
     if (local && !session.runtime) throw new Error("AgentX local runtime was not installed");
@@ -131,11 +158,11 @@ export class AgentXReplaySolver implements Solver {
           await this.executeMeasurement({ ...input, payload: { ...workload, concurrency: 1, traceCount: 1 } },
             session, python, runner, lexicon, context, binding, undefined, true);
         };
-        const captured = await captureAgentXProfile({
+        const captured = await captureServiceProfile({
           endpoint: expectNonEmptyString(binding.model.endpoint, "AgentX profiling service"), key: binding.auth.value,
           ...profile, directory: profile.traceDirectory, destination: join(directory, "trace"),
           exportTimeoutSeconds: profile.exportTimeoutSeconds, signal: context.signal,
-          ...(this.config.pythonExecutable ? { pythonExecutable: this.config.pythonExecutable } : {}),
+          ...(!this.config.loadNode && this.config.pythonExecutable ? { pythonExecutable: this.config.pythonExecutable } : {}),
         }, measure, profile.provider ? warmup : undefined);
         summary = captured.measurement;
         summary.deviceProfile = collectionEvidence(captured.profile, "profiling");
@@ -150,7 +177,7 @@ export class AgentXReplaySolver implements Solver {
             ...(summary.engine ? { engine: summary.engine } : {}) }) }] }, null, 2) + "\n");
       }
       await writeFile(join(directory, "agentx-summary.json"), JSON.stringify(summary, null, 2) + "\n", "utf8");
-      return { finalText: `AgentX completed at ${workload.concurrency} concurrent session trees`, usage: profile ?
+      return { finalText: `AgentX completed at ${summary.measuredConcurrency ?? workload.concurrency} concurrent session trees`, usage: profile ?
         { inputTokens: null, outputTokens: null, totalTokens: null } : agentXUsage(summary), observations: summary };
     } catch (error) {
       if (collection) {
@@ -172,7 +199,7 @@ export class AgentXReplaySolver implements Solver {
     const workload = parseWorkload(input.payload);
     const diagnostic = workload.collection?.type === "profiling";
     const configured = binding.model.endpoint;
-    const base = configured === this.binding.model.endpoint ? session.modelEndpoint?.baseUrl ?? configured :
+    const base = this.config.loadNode ? configured : configured === this.binding.model.endpoint ? session.modelEndpoint?.baseUrl ?? configured :
       configured && this.runtime.environmentName === "docker" && session.modelEndpoint ? dockerHostModelEndpoint(configured) : configured;
     if (base === null) throw new TypeError("Missing AgentX endpoint");
     const endpoint = agentXEndpoint(base);
@@ -180,6 +207,7 @@ export class AgentXReplaySolver implements Solver {
     const tokenizerPath = envPath(session.workdir, "agentx-tokenizer");
     const phase = diagnostic ? "profiling" : "performance";
     const request = { schemaVersion: 1, key: context.key, workload, ...endpoint,
+      ...(this.config.loadNode ? { remoteTokenizerDigest: lexicon.digest } : {}),
       ...(workload.collection?.type === "performance" && workload.collection.engineMetrics ? { engineMetrics: {
         sampleWindow: workload.collection.sampleWindow, names: workload.collection.engineMetrics, apiKey: binding.auth.value,
         endpoint: endpoint.url + endpoint.endpoint.replace(/(?:\/v1)?\/chat\/completions$/u, "") } } : {}),
@@ -190,7 +218,9 @@ export class AgentXReplaySolver implements Solver {
       ...(binding.model.reasoningEffort === undefined ? {} : { reasoningEffort: binding.model.reasoningEffort }),
       artifactDir: envPath(session.workdir, warmup ? "agentx-warmup" : phase), warmup,
       outputDir: warmup ? envPath(session.workdir, phase, "warmup") : session.agentOutputDir, ...(this.config.requestTimeoutSeconds === undefined ? {} : { requestTimeoutSeconds: this.config.requestTimeoutSeconds }) };
-    const handle = await session.start({ executable: python, args: [runner], cwd: session.workdir,
+    const args = this.config.loadNode ? [runner, "run", this.config.loadNode, this.config.pythonExecutable ?? "python3",
+      lexicon.path, await agentXBridgeDigest(context.signal)] : [runner];
+    const handle = await session.start({ executable: python, args, cwd: session.workdir,
       env: { PYTHONDONTWRITEBYTECODE: "1", PYTHONUNBUFFERED: "1", PYTHONIOENCODING: "utf-8", PYTHONUTF8: "1" }, input: Buffer.from(JSON.stringify(request)) }, context.signal);
     try {
       const observedOutput = async () => {

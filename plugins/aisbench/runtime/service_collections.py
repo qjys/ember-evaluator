@@ -6,6 +6,7 @@ import re
 import shutil
 import signal
 import time
+from threading import Event, Thread
 from urllib.error import HTTPError
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 from uuid import uuid4
@@ -74,6 +75,40 @@ def engine_result(names, before, after):
         result.append(row)
     return {"status": "measured" if complete and not missing and not before_error and not after_error else "partial",
             "series": result, "missing": sorted(missing), "errors": [e for e in (before_error, after_error) if e]}
+
+
+class ServiceWindow:
+    """Sample gauges while requests are active, preserving label sets and missing readings."""
+    def __init__(self, config, names, directory):
+        self.config, self.names, self.directory = config, names, directory
+        self.stop = Event()
+        self.before = read_metrics(config, names)
+        self.summary = {}
+        self.worker = Thread(target=self.sample, daemon=True)
+
+    def sample(self):
+        with (self.directory / "engine-series.jsonl").open("w", encoding="utf-8") as output:
+            while not self.stop.is_set():
+                (series, _), error = read_metrics(self.config, self.names)
+                values = {}
+                for label, (_, value) in series.items():
+                    stats = self.summary.setdefault(label, {"count": 0, "sum": 0, "peak": value})
+                    stats["count"] += 1
+                    stats["sum"] += value
+                    stats["peak"] = max(stats["peak"], value)
+                    values[label] = value
+                output.write(json.dumps({"time": time.time(), "values": values, "error": error}) + "\n")
+                output.flush()
+                self.stop.wait(1)
+
+    def finish(self):
+        self.stop.set()
+        self.worker.join()
+        result = engine_result(self.names, self.before, read_metrics(self.config, self.names))
+        result["rawSeries"] = "engine-series.jsonl"
+        result["window"] = {label: {"mean": s["sum"] / s["count"], "peak": s["peak"], "samples": s["count"]}
+                            for label, s in self.summary.items()}
+        return result
 
 
 def wait_for_exports(root, timeout):

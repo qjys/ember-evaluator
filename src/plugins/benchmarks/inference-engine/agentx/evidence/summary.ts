@@ -1,6 +1,6 @@
 import { assertJsonValue, expectNonEmptyString, expectPositiveInteger, expectRecord, rejectUnknown } from "../../../../../core/validation/input.js";
 import type { Usage } from "../../../../../core/contracts/result.js";
-import { collectionEvidence, parseCollection, type AgentXCollection } from "./service-collections.js";
+import { collectionEvidence, parseCollection, type AgentXCollection } from "../../shared/service-collections.js";
 import type { JsonValue } from "../../../../../core/contracts/task.js";
 import { parseTelemetry, type AgentXTelemetry } from "./telemetry.js";
 import { parseMsprofSummary, type MsprofSummary } from "./legacy-msprof.js";
@@ -8,10 +8,14 @@ import { parseNetworkLatencyConfig, parseNetworkLatencyProbes, type AgentXNetwor
 
 import { AGENTX_VERSION } from "../../../../../runtimes/agentx/versions.js";
 
+import { agentXManagedArgs, nativeArguments } from "../../../../../core/validation/native-args.js";
+
 export type AgentXVariant = "256k" | "full";
 // Keep smoke readable for saved results and controlled bridge tests; new YAML rejects it.
 export type AgentXMode = "standard" | "smoke" | "replay";
 export type AgentXWorkload = {
+  nativeArgs?: string[];
+  nativeConcurrency?: boolean;
   schemaVersion: 1;
   kind: "agentx";
   collection?: AgentXCollection;
@@ -30,7 +34,7 @@ export type AgentXWorkload = {
 
 export function parseWorkload(value: unknown): AgentXWorkload {
   const v = expectRecord(value, "AgentX workload");
-  rejectUnknown(v, ["schemaVersion", "kind", "variant", "mode", "concurrency", "durationSeconds", "seed", "dataset", "loader", "revision", "sha256", "tracePath", "traceCount", "collection"], "AgentX workload");
+  rejectUnknown(v, ["schemaVersion", "kind", "variant", "mode", "concurrency", "durationSeconds", "seed", "dataset", "loader", "revision", "sha256", "tracePath", "traceCount", "collection", "nativeArgs", "nativeConcurrency"], "AgentX workload");
   if (v.schemaVersion !== 1 || v.kind !== "agentx" || !["256k", "full"].includes(String(v.variant)) ||
     !["standard", "smoke", "replay"].includes(String(v.mode)) || !Number.isSafeInteger(v.seed) ||
     !/^(?:[a-f0-9]{40}|local:[a-f0-9]{64})$/u.test(String(v.revision)) || !/^[a-f0-9]{64}$/u.test(String(v.sha256)) ||
@@ -50,6 +54,7 @@ export function parseWorkload(value: unknown): AgentXWorkload {
   if (v.mode === "replay") mode = "replay";
   else if (v.mode === "standard") mode = "standard";
   return { schemaVersion: 1, kind: "agentx", variant, mode,
+    ...(v.nativeArgs === undefined ? {} : { nativeArgs: nativeArguments(v.nativeArgs, agentXManagedArgs) }), ...(v.nativeConcurrency === true ? { nativeConcurrency: true } : {}),
     ...(v.collection === undefined ? {} : { collection: parseCollection(v.collection) }),
     concurrency, durationSeconds, seed: Number(v.seed),
     dataset, loader, revision: String(v.revision), sha256: String(v.sha256), tracePath: "input/traces.jsonl",
@@ -109,6 +114,7 @@ export type AgentXNetworkLatencySummary = {
   warnings: string[];
 };
 export type AgentXSummary = {
+  measuredConcurrency?: number;
   schemaVersion: 1;
   kind: "agentx";
   harnessVersion: string;
@@ -233,6 +239,13 @@ export function normalizeAgentXExport(value: unknown, workload: AgentXWorkload, 
   if (raw.was_cancelled !== false) throw new TypeError("AgentX profiling did not complete");
   const metadata = raw.metadata == null ? {} : expectRecord(raw.metadata, "AgentX metadata");
   if (metadata.scenario !== "agentx") throw new TypeError("AgentX export scenario differs from agentx");
+  let measuredConcurrency: number | undefined;
+  if (workload.nativeArgs) {
+    const config = expectRecord(raw.input_config, "AgentX exported input_config");
+    const phase = Array.isArray(config.phases) ? config.phases.find(p => expectRecord(p, "phase").kind === "profiling") : undefined;
+    measuredConcurrency = expectPositiveInteger(expectRecord(phase, "AgentX profiling phase").concurrency, "AgentX exported concurrency");
+    if (!workload.nativeConcurrency && measuredConcurrency !== workload.concurrency) throw new TypeError("AgentX exported concurrency differs from benchmark.concurrency");
+  }
   const valid = metadata.submission_valid;
   if (valid !== undefined && typeof valid !== "boolean") throw new TypeError("Invalid AgentX submission_valid");
   const reasons = metadata.submission_invalid_reasons ?? [];
@@ -241,6 +254,7 @@ export function normalizeAgentXExport(value: unknown, workload: AgentXWorkload, 
   const incomparableReasons = [...reasons.map(String)];
   if (workload.mode !== "standard") incomparableReasons.push(workload.mode === "replay" ? "full_trace_replay" : "smoke_run");
   if (workload.mode === "standard" && workload.durationSeconds !== 3600) incomparableReasons.push("custom_duration");
+  if (workload.nativeArgs?.length) incomparableReasons.push("native_arguments");
   if (valid !== true) incomparableReasons.push("upstream_submission_not_valid");
   const measured = profiling.duration?.mean;
   // The observed first/last response span can differ from the configured phase
@@ -248,7 +262,7 @@ export function normalizeAgentXExport(value: unknown, workload: AgentXWorkload, 
   if (measured == null || measured <= 0) incomparableReasons.push("missing_profiling_window");
   if (!(profiling.requests?.mean && profiling.requests.mean > 0)) incomparableReasons.push("no_successful_requests");
   return { schemaVersion: 1, kind: "agentx", harnessVersion: AGENTX_VERSION, workload, lexicon,
-    profiling, warmup: statistics(raw.warmup_metrics == null ? {} : expectRecord(raw.warmup_metrics, "AgentX warmup")),
+    ...(measuredConcurrency ? { measuredConcurrency } : {}), profiling, warmup: statistics(raw.warmup_metrics == null ? {} : expectRecord(raw.warmup_metrics, "AgentX warmup")),
     upstreamSubmissionValid: typeof valid === "boolean" ? valid : null, upstreamInvalidReasons: reasons.map(String),
     comparable: incomparableReasons.length === 0, incomparableReasons: [...new Set(incomparableReasons)],
     ...(workload.mode === "replay" ? { replayCoverage: parseReplayCoverage(coverage, workload) } : {}),
@@ -297,6 +311,7 @@ export function parseAgentXSummary(value: unknown): AgentXSummary {
     throw new TypeError("Invalid AgentX comparability");
   return { schemaVersion: 1, kind: "agentx", harnessVersion: AGENTX_VERSION, workload,
     ...(directory === undefined ? {} : { artifactDirectory: directory }),
+    ...(raw.measuredConcurrency === undefined ? {} : { measuredConcurrency: expectPositiveInteger(raw.measuredConcurrency, "AgentX exported concurrency") }),
     lexicon: { source: String(lexicon.source), revision: String(lexicon.revision), digest: String(lexicon.digest) },
     profiling, warmup: savedStatistics(raw.warmup),
     upstreamSubmissionValid: raw.upstreamSubmissionValid, upstreamInvalidReasons: strings(raw.upstreamInvalidReasons),

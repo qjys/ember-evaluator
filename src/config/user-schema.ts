@@ -13,6 +13,9 @@ export type BenchmarkSelection = Omit<PluginSelection, "service"> & {
   name: string;
   version?: string;
   scenario?: string;
+  workload?: Record<string, unknown>;
+  concurrency?: number[];
+  collect?: string;
   evaluationScenario?: EvaluationScenario;
   solver?: string | PluginSelection;
   verifier?: string | PluginSelection;
@@ -95,9 +98,13 @@ export function parseUserConfig(value: unknown): UserConfig {
     parsedServices[name] = parsed;
   }
   const rawBenchmark = typeof record.benchmark === "string" ? { name: record.benchmark } : expectRecord(record.benchmark, "benchmark");
-  rejectUnknown(rawBenchmark, ["name", "config", "version", "scenario", "evaluationScenario", "solver", "verifier"], "benchmark");
+  rejectUnknown(rawBenchmark, ["name", "config", "version", "scenario", "evaluationScenario", "solver", "verifier", "workload", "concurrency", "collect"], "benchmark");
+  if (rawBenchmark.concurrency !== undefined && !Array.isArray(rawBenchmark.concurrency)) throw new TypeError("benchmark.concurrency must be an array");
   const benchmark: BenchmarkSelection = {
     name: expectNonEmptyString(rawBenchmark.name, "benchmark.name"),
+    ...(rawBenchmark.workload === undefined ? {} : { workload: expectRecord(rawBenchmark.workload, "benchmark.workload") }),
+    ...(rawBenchmark.collect === undefined ? {} : { collect: expectNonEmptyString(rawBenchmark.collect, "benchmark.collect") }),
+    ...(rawBenchmark.concurrency === undefined ? {} : { concurrency: rawBenchmark.concurrency.map(n => expectPositiveInteger(n, "benchmark.concurrency")) }),
     ...(rawBenchmark.config === undefined ? {} : { config: structuredClone(expectRecord(rawBenchmark.config, "benchmark.config")) }),
     ...(rawBenchmark.version === undefined ? {} : { version: expectNonEmptyString(rawBenchmark.version, "benchmark.version") }),
     ...(rawBenchmark.scenario === undefined ? {} : { scenario: expectNonEmptyString(rawBenchmark.scenario, "benchmark.scenario") }),

@@ -107,6 +107,8 @@ Benchmark 分为 `agent-harness/`、`inference-engine/`、`operator/`，各自�
 
 [plugins/index.ts](../../src/plugins/index.ts) 组合注册入口。Benchmark、Solver、Environment、Verifier、Store、Scheduler 使用各自入口；Metrics 和 Reporter 分别由 [metrics/index.ts](../../src/plugins/metrics/index.ts) 和 [reporters/index.ts](../../src/plugins/reporters/index.ts) 注册。外部插件通过显式 `--patch` 加载，省略参数不扫描默认目录，配置方法见[插件开发与加载](plugins.md)。
 
+AgentX 和 AISBench 共用 `runtimes/agentx/service-profile.ts`。两个 Solver 分别提供发压回调，服务 profiler 负责启停采集、在推理节点采样以及导出 trace。两个 Metrics 插件离线重建报告时，均通过 `plugins/benchmarks/inference-engine/shared/service-collections.ts` 读取诊断证据。
+
 同一功能可以跨角色目录。例如 AgentX 的输入和证据在 `plugins/benchmarks/inference-engine/agentx/`，负载调用在 `plugins/solvers/agentx-replay.ts`，安装和桥接在 `runtimes/agentx/`，指标与报告分别在 metrics 和 reporters。`evidence/` 直接解析保存的结果，不通过注册入口加载安装器或采样进程；共享版本信息来自无 I/O 的 `runtimes/agentx/versions.ts`。
 
 构建时，[build-plugins.mjs](../../scripts/build-plugins.mjs) 扫描仓库根目录下的 `plugins/*/arsi-evaluator-plugin.json`，把构建产物和 patch 写到 `dist/plugins/<id>/`，并生成默认插件列表 `dist/bundled-plugins.patch.yaml`。运行时由注册表加载这份列表。CLI 命令由宿主定义。

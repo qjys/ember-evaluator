@@ -7,7 +7,7 @@ import type { EffectiveConfig } from "../../../../core/contracts/config.js";
 import type { Benchmark, BenchmarkRunPlan } from "../../../../core/contracts/benchmark.js";
 import type { PreparedTask, SourceLock, TaskRef } from "../../../../core/contracts/task.js";
 import type { AttemptStepResult, ResultSnapshot, SolveResult, VerifyResult } from "../../../../core/contracts/result.js";
-import { parseEngineMetrics, parseProfileConfig, type AgentXProfileConfig } from "./evidence/service-collections.js";
+import { parseEngineMetrics, parseProfileConfig, serviceProfileMeasurements, type AgentXProfileConfig } from "../shared/service-collections.js";
 import { fingerprintConfig } from "../../../../core/results/run-manifest.js";
 import { DatasetCache } from "../../../../infrastructure/datasets/cache.js";
 import type { DatasetRecordSource } from "../../../../infrastructure/datasets/record-source.js";
@@ -18,7 +18,11 @@ import { agentXAssets, agentXBridgeDigest } from "../../../../runtimes/agentx/ru
 import { parseAgentXSummary, successfulAgentXWindow, type AgentXMode, type AgentXVariant, type AgentXWorkload } from "./evidence/summary.js";
 import { parseTelemetryConfig } from "./evidence/telemetry.js";
 
+import { agentXManagedArgs, nativeArguments } from "../../../../core/validation/native-args.js";
+
 export type AgentXConfig = {
+  nativeArgs?: string[];
+  nativeConcurrency?: boolean;
   measurementMode?: "performance" | "profiling" | "all";
   profiling?: AgentXProfileConfig;
   engineMetrics?: string[];
@@ -35,14 +39,21 @@ export type AgentXConfig = {
 
 export function parseAgentXConfig(value: unknown): AgentXConfig {
   const v = expectRecord(value, "agentx");
-  rejectUnknown(v, ["variant", "mode", "concurrency", "durationSeconds", "seed", "traceCount", "cacheDir", "hfToken", "localPath", "engineMetrics", "profiling", "measurementMode"], "agentx");
+  rejectUnknown(v, ["variant", "mode", "concurrency", "durationSeconds", "seed", "traceCount", "cacheDir", "hfToken", "localPath", "engineMetrics", "profiling", "measurementMode", "nativeArgs", "nativeArgsEnabled", "nativeConcurrency"], "agentx");
+  const args = v.nativeArgsEnabled === true || v.nativeArgs !== undefined ? nativeArguments(v.nativeArgs ?? [], agentXManagedArgs) : undefined;
+  if (v.nativeConcurrency && !args) throw new TypeError("nativeConcurrency requires native AgentX args");
   if (v.variant !== undefined && v.variant !== "256k" && v.variant !== "full") throw new TypeError("agentx.variant must be 256k or full");
   if (v.mode !== undefined && !["standard", "replay"].includes(String(v.mode))) throw new TypeError("agentx.mode must be standard or replay");
   const mode = v.mode === "replay" ? "replay" : "standard";
-  const entries = v.concurrency ?? [1];
+  const nativeBatchFlag = args?.findIndex(token => token === "--concurrency" || token.startsWith("--concurrency=")) ?? -1;
+  const nativeBatch = args && nativeBatchFlag >= 0 ? expectPositiveInteger(Number(args[nativeBatchFlag]!.split("=")[1] ?? args[nativeBatchFlag + 1]), "native --concurrency") : undefined;
+  if (v.nativeConcurrency && !nativeBatch && ["profiling","all"].includes(String(v.measurementMode)))
+    throw new TypeError("Specify benchmark.concurrency or native --concurrency for a bounded AgentX diagnostic");
+  const entries = v.nativeConcurrency && nativeBatch ? [nativeBatch] : v.concurrency ?? [1];
   if (!Array.isArray(entries) || !entries.length) throw new TypeError("agentx.concurrency must be a non-empty array");
   const concurrency = entries.map(n => expectPositiveInteger(n, "agentx.concurrency"));
   if (new Set(concurrency).size !== concurrency.length) throw new TypeError("agentx.concurrency must not contain duplicates");
+  if (nativeBatch && !v.nativeConcurrency && concurrency.some(n => n !== nativeBatch)) throw new TypeError("benchmark.concurrency conflicts with native --concurrency");
   const durationSeconds = expectPositiveInteger(v.durationSeconds ?? (mode === "replay" ? 86400 : 3600), "agentx.durationSeconds");
   const seed = v.seed ?? 42;
   if (!Number.isSafeInteger(seed)) throw new TypeError("agentx.seed must be a safe integer");
@@ -60,10 +71,14 @@ export function parseAgentXConfig(value: unknown): AgentXConfig {
   const engineMetrics = v.engineMetrics === undefined ? measurementMode && measurementMode !== "profiling" ?
     (configuredProfile?.provider === "sglang" ? ["sglang:token_usage", "sglang:num_running_reqs", "sglang:num_queue_reqs"] :
       ["vllm:kv_cache_usage_perc", "vllm:num_requests_running", "vllm:num_requests_waiting"]) : undefined : parseEngineMetrics(v.engineMetrics);
+  if (profiling && args?.some(token => ["--public-dataset", "--num-dataset-entries", "--num-conversations", "--dataset-sampling-strategy",
+    "--request-count", "--trajectory-start-min-ratio", "--trajectory-start-max-ratio", "--warmup-requests-per-lane"].includes(token.split("=")[0]!)))
+    throw new TypeError("Native workload controls conflict with the bounded profiling replay; use collect: performance or benchmark.workload.type: replay");
   const profileTrees = profiling?.traceCount;
   if (profileTrees !== undefined && (concurrency.some(n => n > profileTrees) || (traceCount !== undefined && profileTrees > traceCount)))
     throw new TypeError("profiling.traceCount must cover every concurrency and fit the replay selection");
   return { ...localDatasetConfig(v), variant: v.variant === "full" ? "full" : "256k", mode, concurrency, durationSeconds, seed: Number(seed),
+    ...(args ? { nativeArgs: args } : {}), ...(v.nativeConcurrency === true ? { nativeConcurrency: true } : {}),
     ...(profiling ? { profiling } : {}), ...(engineMetrics ? { engineMetrics } : {}), ...(measurementMode ? { measurementMode } : {}),
     ...(traceCount === undefined ? {} : { traceCount }),
     cacheDir: expectNonEmptyString(v.cacheDir ?? ".cache/agentx", "agentx.cacheDir"),
@@ -93,15 +108,7 @@ export class AgentXBenchmark implements Benchmark {
     if (formal) requested.add("service/requests");
     if (formal && (this.config.engineMetrics || telemetry.vllm)) requested.add("engine/engine");
     if (formal && telemetry.ascend) requested.add("resource/npu");
-    const profile = this.config.profiling;
-    if (profile) {
-      const preset = profile.preset ?? "timeline";
-      if (preset === "full" || preset === "timeline") {
-        for (const type of ["execution/operators", "execution/runtime", "parallelism/communication", "parallelism/timeline",
-          "resource/npu", "hardware/hbm", "hardware/pmu", "hardware/cache"]) requested.add(type);
-        if (preset === "full" || profile.nodeMetrics) requested.add("resource/host");
-      } else requested.add({ compute: "hardware/pmu", bandwidth: "hardware/hbm", cache: "hardware/cache" }[preset]);
-    }
+    for (const path of serviceProfileMeasurements(this.config.profiling)) requested.add(path);
     return [...requested];
   }
 
@@ -140,7 +147,7 @@ export class AgentXBenchmark implements Benchmark {
     for (const concurrency of this.config.concurrency) {
       signal.throwIfAborted();
       const id = this.id(concurrency) + (this.config.measurementMode === "profiling" ? "-profiling" : "");
-      yield { id, recordKey: { concurrency }, measurementConcurrency: concurrency };
+      yield { id, recordKey: { concurrency }, measurementConcurrency: this.config.nativeConcurrency ? null : concurrency };
     }
   }
 
@@ -180,6 +187,7 @@ export class AgentXBenchmark implements Benchmark {
       ? await this.source.files.file(source, "traces.jsonl", signal)
       : (await this.cache.fetch(file.origin, file.sha256, signal, token ? { Authorization: `Bearer ${token}` } : undefined)).path;
     const base: AgentXWorkload = { schemaVersion: 1, kind: "agentx", variant: this.config.variant, mode: this.config.mode,
+      ...(this.config.nativeArgs ? { nativeArgs: this.config.nativeArgs } : {}), ...(this.config.nativeConcurrency ? { nativeConcurrency: true } : {}),
       concurrency, durationSeconds: this.config.durationSeconds, seed: this.config.seed, dataset: this.dataset,
       loader: `semianalysis_cc_traces_weka_062126${this.config.variant === "256k" ? "_256k" : ""}`,
       revision: source.revision, sha256: file.sha256, tracePath: "input/traces.jsonl",
@@ -198,7 +206,10 @@ export class AgentXBenchmark implements Benchmark {
     };
     const performance = taskFor(formal);
     if (!this.config.profiling) return performance;
-    const profiling = taskFor({ ...base, mode: "replay", traceCount: this.config.profiling.traceCount ?? concurrency,
+    const diagnosticArgs = base.nativeArgs?.filter((token, index, tokens) =>
+      token !== "--concurrency" && !token.startsWith("--concurrency=") && tokens[index - 1] !== "--concurrency");
+    const { nativeConcurrency: _nativeConcurrency, ...diagnosticBase } = base;
+    const profiling = taskFor({ ...diagnosticBase, ...(diagnosticArgs ? { nativeArgs: diagnosticArgs } : {}), mode: "replay", traceCount: this.config.profiling.traceCount ?? concurrency,
       collection: { type: "profiling", profiling: this.config.profiling } });
     if (diagnostic) return profiling;
     return { ...performance, steps: [{ name: "performance", task: performance }, { name: "profiling", task: profiling }] };

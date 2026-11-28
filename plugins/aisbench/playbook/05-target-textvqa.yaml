@@ -1,0 +1,6 @@
+target: blue-vllm-tp2
+benchmark:
+  name: aisbench
+  workload: { type: dataset, dataset: textvqa_gen_base64, requests: 100 }
+  concurrency: [1, 8]
+  collect: all

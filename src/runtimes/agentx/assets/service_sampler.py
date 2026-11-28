@@ -164,7 +164,11 @@ def run(config):
     root = Path(config["destination"])
     preset = config.get("preset", "timeline")
     stopped = Event()
-    Thread(target=lambda: (sys.stdin.buffer.read(), stopped.set()), daemon=True).start()
+    def wait_for_stop():
+        while os.read(0, 4096):
+            pass
+        stopped.set()
+    Thread(target=wait_for_stop, daemon=True).start()
     proc = None
     workers = []
     result = {"preset": preset, "traceDirectory": str(root)}

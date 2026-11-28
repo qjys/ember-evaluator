@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { join, resolve } from "node:path";
 import { expect, test } from "vitest";
-import { captureAgentXProfile } from "../../src/runtimes/agentx/service-profile.js";
+import { captureServiceProfile as captureAgentXProfile } from "../../src/runtimes/agentx/service-profile.js";
 import { resolveAgentXPython } from "../../src/runtimes/agentx/runtime.js";
 
 const python = await resolveAgentXPython(undefined, AbortSignal.timeout(15000)).catch(() => undefined);

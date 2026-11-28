@@ -48,6 +48,10 @@ For Claude Code and other CLI adapters that use Evaluator's Messages relay, set 
 | --- | --- | --- | --- |
 | `benchmark.name` | non-empty string | Required in object form | Select a registered benchmark or Benchmark Profile. `benchmark: gsm8k` is shorthand for `benchmark: { name: gsm8k }`. |
 | `benchmark.version` | non-empty string | Optional, Profile `defaultVersion` if present | Use a version declared by the selected Profile. Quote numeric-looking versions such as `"1.0"`. |
+| `target` | string | Optional | Reusable inference target in `targets.yaml` or the file named by `EVALUATOR_TARGETS`. [Target setup](../benchmarks/inference-workloads.md) |
+| `benchmark.workload` | object | Optional | Select a tool-specific workload by `type`. |
+| `benchmark.concurrency` | positive integer list | Structured workload defaults to `[1]`; native uses its own setting | Run each point separately. |
+| `benchmark.collect` | performance, profiling, all | performance for workload syntax | Select formal, diagnostic or both rounds. |
 | `benchmark.scenario` | non-empty string | Optional, Profile `defaultScenario` if present | Use a scenario declared by the selected Profile. |
 | `benchmark.evaluationScenario` | `task` or `inference-engine` | Optional, selected by the benchmark profile | Selects the result layout. GSM8K stores results per question. AgentX and AISBench load tests store results per concurrency. Native AISBench dataset preparation and validation use the task layout. |
 | `benchmark.config` | object | Optional, Profile settings or empty object | Options for the selected Benchmark. |

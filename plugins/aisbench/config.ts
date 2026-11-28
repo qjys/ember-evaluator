@@ -40,7 +40,7 @@ export function parseWorkload(value: unknown): AisbenchWorkload {
     concurrency: expectPositiveInteger(v.concurrency ?? 16, "concurrency"), requestRate, testType: v.testType === "text" ? "text" : "stream",
     prefixCache: { enabled, warmup, prefixRatio: ratio, seed, prefixCount: expectPositiveInteger(c.prefixCount ?? 1, "prefixCount"), dp: expectPositiveInteger(c.dp ?? 1, "dp") } };
 }
-export type SshConfig = { host: string; user: string; port: number; identityFile?: string };
+export type SshConfig = { host: string; user?: string; port?: number; identityFile?: string };
 export type AisbenchSshConfig = { remote: { ssh: SshConfig; pythonExecutable: string; aisbenchWorkPath?: string; workingDirectory?: string; aisbenchVersion: string; workRoot: string; pollIntervalSeconds: number }; tokenizerPath?: string; podInfo: string[] };
 function absolute(value: unknown, name: string): string {
   const text = expectNonEmptyString(value, name);
@@ -54,8 +54,8 @@ export function parseAisbenchSshConfig(value: unknown): AisbenchSshConfig {
   rejectUnknown(r, ["ssh", "pythonExecutable", "aisbenchWorkPath", "workingDirectory", "aisbenchVersion", "workRoot", "pollIntervalSeconds"], "remote");
   const s = expectRecord(r.ssh, "ssh");
   rejectUnknown(s, ["host", "port", "user", "identityFile"], "ssh");
-  const host = expectNonEmptyString(s.host, "ssh.host"), user = expectNonEmptyString(s.user, "ssh.user");
-  if (!/^[a-zA-Z0-9][a-zA-Z0-9._:-]*$/u.test(host) || !/^[a-zA-Z0-9_][a-zA-Z0-9_.-]*$/u.test(user)) throw new TypeError("Invalid SSH host/user");
+  const host = expectNonEmptyString(s.host, "ssh.host"), user = s.user === undefined ? undefined : expectNonEmptyString(s.user, "ssh.user");
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9._:-]*$/u.test(host) || (user !== undefined && !/^[a-zA-Z0-9_][a-zA-Z0-9_.-]*$/u.test(user))) throw new TypeError("Invalid SSH host/user");
   const port = expectPositiveInteger(s.port ?? 22, "ssh.port");
   if (port > 65535) throw new TypeError("Invalid SSH port");
   const pollIntervalSeconds = number(r.pollIntervalSeconds ?? 10, "pollIntervalSeconds");
@@ -64,9 +64,9 @@ export function parseAisbenchSshConfig(value: unknown): AisbenchSshConfig {
   if (!Array.isArray(podInfo) || podInfo.some(p => typeof p !== "string" || !/^[a-zA-Z0-9.[\]:_-]+:\d+$/u.test(p))) throw new TypeError("podInfo must contain host:port entries");
   const aisbenchVersion = expectNonEmptyString(r.aisbenchVersion, "aisbenchVersion");
   if (!/^[a-zA-Z0-9.+_-]+$/u.test(aisbenchVersion)) throw new TypeError("Invalid AISBench version");
-  const workRoot = absolute(r.workRoot, "workRoot");
+  const workRoot = r.workRoot === undefined ? "auto" : absolute(r.workRoot, "workRoot");
   if (workRoot === "/") throw new TypeError("workRoot must not be root");
-  return { remote: { ssh: { host, user, port, ...(s.identityFile === undefined ? {} : { identityFile: expectNonEmptyString(s.identityFile, "identityFile") }) },
+  return { remote: { ssh: { host, ...(user ? { user } : {}), ...(s.port !== undefined || user ? { port } : {}), ...(s.identityFile === undefined ? {} : { identityFile: expectNonEmptyString(s.identityFile, "identityFile") }) },
     pythonExecutable: absolute(r.pythonExecutable, "pythonExecutable"), ...(r.aisbenchWorkPath === undefined ? {} : { aisbenchWorkPath: absolute(r.aisbenchWorkPath, "aisbenchWorkPath") }),
     ...(r.workingDirectory === undefined ? {} : { workingDirectory: absolute(r.workingDirectory, "workingDirectory") }), workRoot, aisbenchVersion, pollIntervalSeconds },
     ...(v.tokenizerPath === undefined ? {} : { tokenizerPath: absolute(v.tokenizerPath, "tokenizerPath") }), podInfo: podInfo.map(p => expectNonEmptyString(p, "podInfo")) };

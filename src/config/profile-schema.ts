@@ -2,6 +2,7 @@ import { assertJsonValue, expectNonEmptyString, expectRecord, rejectUnknown } fr
 import { type Selection } from "../core/contracts/config.js";
 import type { BenchmarkSelection, UserConfig } from "./user-schema.js";
 import type { ScenarioDefault } from "./evaluation-scenario.js";
+import { workloadPresets, type WorkloadPreset } from "./inference-workload.js";
 
 export type ProfileRole = "benchmark" | "solver";
 export type ProfileDefaults = Omit<Partial<UserConfig>, "benchmark"> & {
@@ -13,6 +14,7 @@ export type ProfileLayer = {
   metricAliases?: Record<string, Selection>;
 };
 export type ConfigProfile = ProfileLayer & {
+  workloads?: Record<string, WorkloadPreset>;
   id: string;
   role: ProfileRole;
   extends?: string;
@@ -52,12 +54,13 @@ function layer(value: unknown, path: string): ProfileLayer {
 export function parseConfigProfile(value: unknown): ConfigProfile {
   assertJsonValue(value, "profile");
   const record = expectRecord(value, "profile");
-  rejectUnknown(record, ["id", "role", "extends", "plugin", "defaults", "metricAliases", "defaultVersion", "defaultScenario", "versions", "scenarios"], "profile");
+  rejectUnknown(record, ["id", "role", "extends", "plugin", "defaults", "metricAliases", "defaultVersion", "defaultScenario", "versions", "scenarios", "workloads"], "profile");
   if (record.role !== "benchmark" && record.role !== "solver") throw new TypeError("profile.role must be benchmark or solver");
   const result: ConfigProfile = { id: expectNonEmptyString(record.id, "profile.id"), role: record.role,
     ...layer(Object.fromEntries(["plugin", "defaults", "metricAliases"].filter(key => record[key] !== undefined).map(key => [key, record[key]])), "profile") };
   for (const key of ["extends", "defaultVersion", "defaultScenario"] as const)
     if (record[key] !== undefined) result[key] = expectNonEmptyString(record[key], `profile.${key}`);
+  if (record.workloads !== undefined) result.workloads = workloadPresets(record.workloads);
   for (const key of ["versions", "scenarios"] as const) {
     if (record[key] !== undefined) result[key] = Object.fromEntries(Object.entries(expectRecord(record[key], `profile.${key}`))
       .map(([id, item]) => [id, layer(item, `profile.${key}.${id}`)]));

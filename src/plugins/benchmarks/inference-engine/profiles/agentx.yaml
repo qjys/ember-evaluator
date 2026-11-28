@@ -1,5 +1,18 @@
 id: agentx
 role: benchmark
+workloads:
+  time-window:
+    scenario: standard
+    defaults: { mode: standard }
+    fields: { durationSeconds: durationSeconds }
+  replay:
+    scenario: replay
+    defaults: { mode: replay }
+    fields: { traces: traceCount, durationSeconds: durationSeconds }
+  native:
+    scenario: standard
+    fields: { args: nativeArgs }
+    defaults: { nativeArgsEnabled: true }
 defaultVersion: "1.0"
 defaultScenario: standard
 versions:

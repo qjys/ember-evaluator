@@ -40,7 +40,7 @@ export class AgentXPerformanceMetrics implements Metrics {
       const diagnosticId = steps ? taskId : taskId + "-profiling";
       const hasProfile = !!steps || selected.has(diagnosticId);
       if (!hasProfile && !summary?.workload.collection) return point;
-      const batch = summary?.workload.concurrency ?? Number(/-c(\d+)$/u.exec(taskId)?.[1]);
+      const batch = summary?.measuredConcurrency ?? summary?.workload.concurrency ?? Number(/-c(\d+)$/u.exec(taskId)?.[1]);
       if (steps && summary && (summary.workload.collection?.type !== "performance" || !taskId.endsWith("-c" + batch)))
         throw new TypeError("AgentX formal result differs from its concurrency point");
       const record = byTask.get(diagnosticId);

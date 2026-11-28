@@ -140,7 +140,7 @@ def collect(root, secret, native=False):
     run = root / "run"
     artifacts = root / "artifacts"
     skipped = []
-    for name in ["native-plan.json", "collections.json", "profiling", "aisbench_result.csv", "aisbench.log", "aisbench_all.log", "aisbench_client.log", "outputs"]:
+    for name in ["native-plan.json", "engine-series.jsonl", "engine-window.json", "collections.json", "profiling", "aisbench_result.csv", "aisbench.log", "aisbench_all.log", "aisbench_client.log", "outputs"]:
         source = run / name
         if not source.exists() or source.is_symlink():
             continue
@@ -186,6 +186,7 @@ def supervise(root):
     stopped = threading.Event()
     cancelled = threading.Event()
     child = None
+    window = None
     secret = [config.get("apiKey"), config.get("profileApiKey")]
     def heartbeat():
         while not stopped.wait(2):
@@ -205,6 +206,11 @@ def supervise(root):
             cancelled.set()
             return
         state["phase"] = "benchmark" if "native" in config and "multimodalGeneration" not in config["native"] else "generating-data"
+        metrics = config.get("windowMetrics")
+        if metrics:
+            from service_collections import ServiceWindow
+            window = ServiceWindow(config, metrics, root / "run")
+            window.worker.start()
         child = subprocess.Popen(args, cwd=run, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         with (root / "artifacts/runner.log").open("a", encoding="utf-8") as log:
             for line in iter(child.stdout.readline, b""):
@@ -216,6 +222,7 @@ def supervise(root):
                 log.write(redact(text, secret))
                 log.flush()
         code = child.wait()
+
     except Exception as error:
         with (root / "artifacts/runner.log").open("a", encoding="utf-8") as log:
             log.write(redact(f"{type(error).__name__}: {error}\n", secret))
@@ -223,6 +230,8 @@ def supervise(root):
         stopped.set()
         thread.join()
         try:
+            if window:
+                atomic(root / "run" / "engine-window.json", window.finish())
             collect(root, secret, native="native" in config)
         except Exception as error:
             code = -1

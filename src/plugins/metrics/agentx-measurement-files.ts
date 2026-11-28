@@ -62,7 +62,9 @@ function rankValues(group: Group, rank: Row): Row {
   }
 }
 
-function diagnostic(group: Group, profile: Row, directory: string): Section {
+export function serviceDiagnosticSection(path: string, profile: Row, directory: string): Section {
+  if (!Object.hasOwn(groups, path)) throw new TypeError("Unknown profiling category " + path);
+  const group = path as Group;
   const coverage = pick(row(profile.categories), [...groups[group]]);
   const values: Row = {};
   const ranks = rows(profile.exports).filter(rank => rank.physicalDevice === undefined).flatMap(rank => {
@@ -137,7 +139,7 @@ export function agentXMeasurementFiles(snapshot: ResultSnapshot, metric: JsonVal
           values: { ...(path === "engine/engine" && summary.engine ? { engine, ...(typeof engine.rawSeries === "string" ?
             { source: formalDir + "/" + evidencePath(engine.rawSeries) } : {}) } : {}), ...(sources.length ? { telemetry: sources } : {}) } };
       }
-      if (groups[path].length && collection.profiling) data.profiling = diagnostic(path, profile, profileDir);
+      if (groups[path].length && collection.profiling) data.profiling = serviceDiagnosticSection(path, profile, profileDir);
       const state = status(Object.values(data).map(p => p.status));
       file.status[label] = state;
       const record = snapshot.records.find(r => r.key.taskId === id);

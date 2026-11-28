@@ -107,6 +107,8 @@ Benchmarks use `agent-harness/`, `inference-engine/`, and `operator/`, each with
 
 [plugins/index.ts](../../src/plugins/index.ts) composes registration entries. Benchmark, Solver, Environment, Verifier, Store, and Scheduler have their own entries; Metrics and Reporter use [metrics/index.ts](../../src/plugins/metrics/index.ts) and [reporters/index.ts](../../src/plugins/reporters/index.ts) respectively. External plugins use explicit `--patch` loading; omitting it does not scan a default directory. See [plugin development](plugins.en.md).
 
+AgentX and AISBench share the service profiler in `runtimes/agentx/service-profile.ts`. Each solver supplies its own load callback. The profiler controls the service, samples the serving node and exports traces. Both metrics plugins read the same diagnostic evidence format through `plugins/benchmarks/inference-engine/shared/service-collections.ts` when rebuilding reports.
+
 A feature can span roles. AgentX input/evidence lives in `plugins/benchmarks/inference-engine/agentx/`, execution calls in `plugins/solvers/agentx-replay.ts`, installation/bridging in `runtimes/agentx/`, and metrics/reporting in their respective roles. `evidence/` parses saved results directly without importing registration entries, installers, or samplers; shared versions come from the I/O-free `runtimes/agentx/versions.ts`.
 
 At build time, [build-plugins.mjs](../../scripts/build-plugins.mjs) scans `plugins/*/arsi-evaluator-plugin.json` at the repository root, installs the build output and patches under `dist/plugins/<id>/`, and writes the default plugin list to `dist/bundled-plugins.patch.yaml`. The registry loads that list at runtime. The host defines CLI commands.

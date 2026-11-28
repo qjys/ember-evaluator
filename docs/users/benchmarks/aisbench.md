@@ -2,6 +2,8 @@
 
 > English | [中文](./aisbench.zh-CN.md)
 
+Use `target`, `workload`, `concurrency` and `collect` to select a load and measurement mode. [Inference workload configuration](./inference-workloads.md)
+
 AISBench ships with Evaluator. The CLI and SDK register it by default.
 
 See the [AISBench plugin guide](../../../plugins/aisbench/README.md) for installation, configuration, execution, offline reports, and limitations.

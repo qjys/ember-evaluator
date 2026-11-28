@@ -4,7 +4,10 @@ import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { agentXAssets } from "./runtime.js";
 
+import type { ProfileNode } from "./profile-node.js";
+
 type Sampling = {
+  node?: ProfileNode;
   destination: string; preset?: string; devices?: number[]; localHost?: boolean; signal: AbortSignal;
   nodeMetrics?: { endpoint: string; names: string[] };
 };
@@ -13,8 +16,9 @@ export async function captureServiceSamples<T>(python: string, options: Sampling
   stopService?: () => Promise<void>) {
   const { destination, preset, devices, nodeMetrics, signal } = options;
   signal.throwIfAborted();
-  const child = spawn(python, ["-B", join(agentXAssets, "service_sampler.py"),
-    JSON.stringify({ destination, preset, devices, nodeMetrics, localHost: options.localHost })], { windowsHide: true, stdio: "pipe" });
+  const config = { destination, preset, devices, nodeMetrics, localHost: options.localHost };
+  const child = options.node?.sample(python, config) ?? spawn(python, ["-B", join(agentXAssets, "service_sampler.py"),
+    JSON.stringify(config)], { windowsHide: true, stdio: "pipe" });
   const closed = once(child, "close");
   // Drain stderr while waiting for the readiness handshake and final summary.
   let diagnostic = "";

@@ -82,9 +82,18 @@ def run_measurement(request, telemetry, metrics_url, counters):
     args = [sys.executable, str(Path(__file__).resolve()), "--harness", "profile",
             "--scenario", "agentx", "--url", request["url"], "--endpoint", request["endpoint"],
             "--model", request["model"], "--tokenizer", request["tokenizerPath"],
-            "--concurrency", str(workload["concurrency"]), "--public-dataset", workload["loader"],
-            "--benchmark-duration", str(workload["durationSeconds"]), "--random-seed", str(workload["seed"]),
-            "--output-artifact-dir", str(artifacts), "--ui", "none", "--no-gpu-telemetry"]
+            "--output-artifact-dir", str(artifacts)]
+    native = workload.get("nativeArgs", [])
+    flags = {token.split("=", 1)[0] for token in native}
+    for flag, value in [("--public-dataset", workload["loader"]), ("--benchmark-duration", workload["durationSeconds"]),
+                        ("--random-seed", workload["seed"]), ("--ui", "none")]:
+        if flag not in flags:
+            args.extend([flag, str(value)])
+    if not flags.intersection({"--gpu-telemetry", "--no-gpu-telemetry"}):
+        args.append("--no-gpu-telemetry")
+    args.extend(native)
+    if not workload.get("nativeConcurrency") and "--concurrency" not in flags:
+        args.extend(["--concurrency", str(workload["concurrency"])])
     endpoints = [source["endpoint"] for source in telemetry.sources.values()]
     if metrics_url:
         endpoints.append(metrics_url)
@@ -106,14 +115,17 @@ def run_measurement(request, telemetry, metrics_url, counters):
     if workload["mode"] == "standard" and workload["durationSeconds"] != 3600:
         # Keep the standard trace sampling and warmup; only override the
         # scenario's minimum duration when needed. Export upstream validity as-is.
-        args.append("--unsafe-override")
+        if "--unsafe-override" not in flags:
+            args.append("--unsafe-override")
     elif workload["mode"] == "smoke":
         # Recorded first-request spacing can span hours. Start every smoke lane
         # immediately so a short window exercises the configured concurrency.
         args += ["--unsafe-override", "--num-dataset-entries", "1", "--warmup-requests-per-lane", "1",
                  "--burst-phase-starts"]
     elif workload["mode"] == "replay":
-        args += ["--unsafe-override", "--num-dataset-entries", str(workload["traceCount"]),
+        if "--unsafe-override" not in flags:
+            args.append("--unsafe-override")
+        args += ["--num-dataset-entries", str(workload["traceCount"]),
                  "--num-conversations", str(workload["traceCount"]), "--dataset-sampling-strategy", "sequential",
                  "--request-count", str(sum(len(keys) for keys in expected.values())),
                  "--trajectory-start-min-ratio", "0", "--trajectory-start-max-ratio", "0"]
@@ -134,6 +146,8 @@ def run_measurement(request, telemetry, metrics_url, counters):
         environment["AIPERF_SERVER_METRICS_COLLECTION_INTERVAL"] = "1"
     if endpoints:
         environment["EVALUATOR_AGENTX_TELEMETRY"] = "1"
+    if "nativeArgs" in workload:
+        (artifacts / "native-command.json").write_text(redact(json.dumps(["agentx", *args[3:]], ensure_ascii=False)), encoding="utf-8")
     child = None
 
     def cancel(_signum, _frame):

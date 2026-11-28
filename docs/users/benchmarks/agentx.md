@@ -2,6 +2,8 @@
 
 > English | [中文](./agentx.zh-CN.md)
 
+Use `target`, `workload`, `concurrency` and `collect` to select a load and measurement mode. [Inference workload configuration](./inference-workloads.md)
+
 AgentX reconstructs request lengths, prefix reuse, session turns, subagent dependencies, and waits from redacted traces to measure throughput/latency. It has no ground truth: `passed` is `null`, with no accuracy/reward. Implementation pins [agentx-harness1.0.7](https://inferencex.semianalysis.com/agentx/quickstart), scenario `agentx`.
 
 ![AgentX replays pinned traces per measurement point through a Python harness and exports performance summaries](../imgs/09-flowchart-agentx-performance-v2.png)

@@ -1,4 +1,4 @@
-import { measurementDirectory } from "arsi-evaluator";
+import { measurementDirectory, serviceDiagnosticSection } from "arsi-evaluator";
 import type { JsonValue, MeasurementMetricFile, ResultSnapshot } from "arsi-evaluator";
 
 type Row = Record<string, JsonValue>;
@@ -23,10 +23,17 @@ export function aisbenchMeasurementFiles(snapshot: ResultSnapshot, value: JsonVa
       const point = points.get(id) ?? {}, concurrency = layout.points[id];
       if (concurrency === undefined) throw new Error(`Missing measurement point for ${id}`);
       const label = measurementDirectory(concurrency);
-      const profiling = path === "execution/operators" || path === "parallelism/timeline";
+      const profiling = path !== "service/requests" && path !== "engine/engine";
       const phase = profiling ? "profiling" : "performance";
       const source = label + "/" + phase;
       const collections = rows(point.collections);
+      if (profiling && point.managed) {
+        const profile = row(collections.find(c => c.profiling)?.profiling);
+        const section = serviceDiagnosticSection(path, { ...profile, artifactDirectory: "profiling" }, source);
+        file.status[label] = section.status;
+        file.points.push({ concurrency, status: section.status, profiling: section });
+        continue;
+      }
       let status = "unavailable";
       let values: Row = {};
       if (path === "service/requests") {
@@ -39,9 +46,12 @@ export function aisbenchMeasurementFiles(snapshot: ResultSnapshot, value: JsonVa
           values = { groups };
         }
       } else if (path === "engine/engine") {
-        const datasets = collections.map(c => ({ dataset: c.dataset ?? null, ...row(c.engine) }));
-        status = coverage(collections.map(c => row(c.engine).status ?? "missing"));
-        values = { datasets };
+        const datasets = collections.filter(c => c.engine).map(c => {
+          const engine = row(c.engine);
+          return { dataset: c.dataset ?? null, ...engine, ...(engine.rawSeries ? { source: source + "/" + engine.rawSeries } : {}) };
+        });
+        status = coverage(datasets.map(d => row(d).status ?? "missing"));
+        values = datasets.length ? { datasets } : { datasets, reason: "No engine metrics were collected for this service binding" };
       } else if (profiling) {
         const datasets = collections.map(c => {
           const profile = row(c.profiling);

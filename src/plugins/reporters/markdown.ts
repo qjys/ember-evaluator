@@ -124,7 +124,7 @@ export class MarkdownReporter implements Reporter {
     return snapshot.run.taskIds.map(taskId => {
       const point = points.find(point => point.taskId === taskId);
       const summary = point?.measurement == null ? null : parseAgentXSummary(point.measurement);
-      const concurrency = summary?.workload.concurrency ?? /-c([1-9]\d*)$/u.exec(taskId)?.[1];
+      const concurrency = summary?.measuredConcurrency ?? summary?.workload.concurrency ?? /-c([1-9]\d*)$/u.exec(taskId)?.[1];
       return { taskId, id: concurrency === undefined ? `task-${safeTaskKey(taskId)}` : `c${concurrency}`,
         title: concurrency === undefined ? taskId : `AgentX c${concurrency}` };
     });

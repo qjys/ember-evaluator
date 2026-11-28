@@ -1,5 +1,19 @@
 id: aisbench
 role: benchmark
+workloads:
+  dataset:
+    scenario: native
+    fields: { backend: backend, dataset: datasets, requests: dataCount, stream: stream }
+  synthetic-text:
+    scenario: native
+    fields: { inputTokens: syntheticWorkload.inputLength, outputTokens: syntheticWorkload.outputLength, requests: dataCount, prefixCache: syntheticWorkload.prefixCache }
+    defaults: { syntheticText: true }
+  synthetic-multimodal:
+    scenario: native
+    fields: { images: multimodalGeneration.imageScenario, textTokens: multimodalGeneration.textTokens, requests: dataCount, outputTokens: maxOutputTokens, manifest: multimodalManifest, action: multimodalAction }
+  native:
+    scenario: native
+    fields: { args: nativeArgs, file: configFile, files: files }
 extends: aisbench-native
 defaultVersion: "1.0"
 defaultScenario: standard

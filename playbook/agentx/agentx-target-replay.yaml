@@ -1,0 +1,6 @@
+target: blue-vllm-tp2
+benchmark:
+  name: agentx
+  workload: { type: replay, traces: 8 }
+  concurrency: [1, 8]
+  collect: all

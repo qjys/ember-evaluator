@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
 import { readFile, realpath } from "node:fs/promises";
 import { isAbsolute, relative, sep } from "node:path";
-import { fingerprintConfig } from "arsi-evaluator";
-import type { Benchmark, EffectiveConfig, PluginFactoryContext, PreparedTask, ResultSnapshot, SolveResult, SourceLock, TaskRef } from "arsi-evaluator";
+import { fingerprintConfig, serviceProfileMeasurements } from "arsi-evaluator";
+import type { AttemptStepResult, Benchmark, EffectiveConfig, PluginFactoryContext, PreparedTask, ResultSnapshot, SolveResult, SourceLock, TaskRef } from "arsi-evaluator";
 import { validateAisbenchRun, validateAisbenchService } from "./benchmark.js";
 import type { NativeConfig } from "./native-config.js";
 import { bundleDigest } from "./ssh/bundle.js";
@@ -32,13 +32,19 @@ export class NativeBenchmark implements Benchmark {
   }
 
   requestedMeasurements(): string[] {
+    if (this.config.measurementMode) return [
+      ...(this.config.measurementMode !== "profiling" ? ["service/requests", "engine/engine"] : []),
+      ...serviceProfileMeasurements(this.config.serviceProfiler)];
     return ["service/requests", ...(this.config.engineMetrics ? ["engine/engine"] : []),
       ...(this.config.profiling ? ["execution/operators", "parallelism/timeline"] : [])];
   }
 
   async validatePrerequisites(ref: TaskRef, snapshot: () => Promise<ResultSnapshot>): Promise<void> {
-    if (!this.config.profiling) return;
+    if (!this.config.profiling && !this.config.serviceProfiler) return;
     for (const record of (await snapshot()).records) {
+      if (record.errors.some(e => e.message.includes("stop_profile unconfirmed")) ||
+          record.steps?.some(step => step.errors.some(e => e.message.includes("stop_profile unconfirmed"))) ||
+          record.cleanupStatus === "unconfirmed") throw new Error("Cannot run next point: stop_profile unconfirmed");
       const observations = record.solve?.observations;
       if (!observations || typeof observations !== "object" || Array.isArray(observations) || !Array.isArray(observations.collections)) continue;
       for (const collection of observations.collections) {
@@ -51,15 +57,21 @@ export class NativeBenchmark implements Benchmark {
 
   validateRun(config: EffectiveConfig): void {
     validateAisbenchRun(config, !this.dataOnly);
-    const profileService = this.config.profiling?.service;
+    if (this.config.serviceProfiler && config.hardware === "gpu") throw new TypeError("Service profiling requires an Ascend target");
+    if (this.config.serviceProfiler && (config.run.sampling || config.run.offset || config.run.taskIds || config.run.maxTasks !== null))
+      throw new TypeError("Select ordered profiling points with benchmark.concurrency");
+    const profileService = (this.config.serviceProfiler ?? this.config.profiling)?.service;
     if (profileService) {
       validateAisbenchService(config, profileService);
-      if (config.services[profileService]?.name !== config.services[config.solver.service]?.name)
+      if (config.services[profileService]?.name !== config.services[config.solver.service]?.name ||
+          (this.config.serviceProfiler && config.services[profileService]?.endpoint !== config.services[config.solver.service]?.endpoint))
         throw new TypeError("AISBench performance and profiling services must serve the same model");
     }
-    if (this.config.multimodalGeneration && !config.solver.config.tokenizerPath)
-      throw new TypeError("multimodalGeneration requires benchmark.solver.config.tokenizerPath on the benchmark host");
-    if (Array.isArray(config.solver.config.podInfo) && config.solver.config.podInfo.length)
+    if (this.config.syntheticWorkload?.prefixCache.enabled && !expectRecord(config.solver.config.remote, "remote").aisbenchWorkPath)
+      throw new TypeError("Prefix-cache workloads require solver.config.remote.aisbenchWorkPath");
+    if ((this.config.multimodalGeneration || this.config.syntheticText) && !config.solver.config.tokenizerPath)
+      throw new TypeError("Generated workloads including multimodalGeneration require benchmark.solver.config.tokenizerPath on the benchmark host");
+    if (!this.config.syntheticText && Array.isArray(config.solver.config.podInfo) && config.solver.config.podInfo.length)
       throw new TypeError("podInfo belongs to the standard prefix-cache workload");
   }
 
@@ -104,12 +116,29 @@ export class NativeBenchmark implements Benchmark {
     const point = Array.from(this.points(source)).find(p => ref.id === p.ref.id);
     if (!point || ref.recordKey !== point.ref.recordKey) throw new TypeError("Invalid native AISBench task selection");
     const shareGenerated = this.config.multimodalGeneration && !this.dataOnly &&
-      source.revision !== "1" && new Set(this.config.concurrency).size > 1;
+      source.revision !== "1" && (new Set(this.config.concurrency).size > 1 || !!this.config.serviceProfiler);
     const payload = { kind: "aisbench-native", schemaVersion: 1, native: point.native, files: source.files,
       ...(shareGenerated ? { sharedGenerationCount: Math.max(...this.config.dataCount!) } : {}),
       bundleDigest: expectNonEmptyString(expectRecord(source.metadata, "source metadata").bundleDigest, "bundleDigest") };
-    return { input: { id: ref.id, prompt: "AISBench native performance measurement", payload }, verification: fingerprintConfig(payload),
-      solveEnv: { workdir: ".", image: null, initialFiles: [], runtime: [] }, verifyEnv: null, transfer: null, verificationMode: "none" };
+    const taskFor = (phase?: "performance" | "profiling"): PreparedTask => {
+      const input = phase ? { ...payload, phase } : payload;
+      return { input: { id: ref.id, prompt: "AISBench native measurement", payload: input }, verification: fingerprintConfig(input),
+        solveEnv: { workdir: ".", image: null, initialFiles: [], runtime: [] }, verifyEnv: null, transfer: null, verificationMode: "none",
+        ...(phase ? { artifactDirectory: { name: phase, source: "solver", requiredFiles: ["collection.json"] } } : {}) };
+    };
+    if (!this.config.measurementMode) return taskFor();
+    if (this.config.measurementMode !== "all") return taskFor(this.config.measurementMode);
+    const formal = taskFor("performance");
+    return { ...formal, steps: [{ name: "performance", task: formal }, { name: "profiling", task: taskFor("profiling") }] };
+  }
+
+  evaluateSteps(_task: PreparedTask, steps: AttemptStepResult[]) {
+    const step = steps.at(-1);
+    if (!step?.verdict || !step.solve) return { verdict: null, continue: false };
+    const data = expectRecord(step.solve.observations, "AISBench evidence");
+    if (step.name === "performance" && (!Array.isArray(data.groups) || !data.groups.length || data.groups.some(g => expectRecord(g, "group").status !== "measured")))
+      throw new Error("Profiling skipped: incomplete formal load");
+    return { verdict: step.verdict, continue: step.name === "performance" };
   }
 
   async verify(task: PreparedTask, result: SolveResult, _session: unknown, signal: AbortSignal) {
@@ -117,6 +146,10 @@ export class NativeBenchmark implements Benchmark {
     const evidence = expectRecord(result.observations, "native AISBench observations");
     if (evidence.kind !== "aisbench-native" || evidence.schemaVersion !== 1 || evidence.taskDigest !== task.verification || !Array.isArray(evidence.groups))
       throw new TypeError("Native AISBench observations differ from the selected task");
+    if (evidence.phase === "performance" && !evidence.groups.length)
+      throw new TypeError("AISBench completed without any request measurements");
+    if (evidence.phase === "profiling" && (evidence.groups.length || !Array.isArray(evidence.collections) || !evidence.collections.length))
+      throw new TypeError("Missing AISBench diagnostic evidence");
     return { passed: null, details: { measurement: "aisbench-native", groups: evidence.groups.length } };
   }
 }

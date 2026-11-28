@@ -71,7 +71,7 @@ async function exportStep(
 }
 
 async function collectDirectory(step: AttemptStep, context: StepContext, spec: NonNullable<PreparedTask["artifactDirectory"]>, signal: AbortSignal): Promise<void> {
-  await publishArtifactDirectory(context.resources.solveEnvironment, context.paths.root, spec, signal);
+  if (spec.source !== "solver") await publishArtifactDirectory(context.resources.solveEnvironment, context.paths.root, spec, signal);
   step.exported = true;
   for (const file of spec.requiredFiles) {
     const path = await checkedPath(context.paths.root, [spec.name, "outputs", file].join("/"));

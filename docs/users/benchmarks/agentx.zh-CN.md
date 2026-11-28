@@ -2,6 +2,8 @@
 
 > [English](./agentx.md) | 中文
 
+日常实验可以通过 `target`、`workload`、`concurrency` 和 `collect` 选择负载和采集模式。[推理引擎压测配置](./inference-workloads.zh-CN.md)
+
 AgentX 使用脱敏 trace 重建请求长度、前缀复用、会话轮次、子 Agent 依赖和等待时间，测量模型服务的吞吐和延迟。它没有 ground truth，`passed` 为 `null`，不输出正确率或奖励分数。实现固定使用 [agentx-harness 1.0.7](https://inferencex.semianalysis.com/agentx/quickstart) 的 `agentx` 场景。
 
 ![AgentX 按测量点回放固定 Trace，由 Python Harness 调用模型服务并生成性能摘要](../imgs/09-flowchart-agentx-performance-v2.png)

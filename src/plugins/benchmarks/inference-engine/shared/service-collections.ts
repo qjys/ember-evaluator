@@ -1,10 +1,11 @@
 import { isAbsolute, posix } from "node:path";
-import type { JsonValue } from "../../../../../core/contracts/task.js";
-import { assertJsonValue, expectNonEmptyString, expectPositiveInteger, expectRecord, rejectUnknown } from "../../../../../core/validation/input.js";
+import type { JsonValue } from "../../../../core/contracts/task.js";
+import { assertJsonValue, expectNonEmptyString, expectPositiveInteger, expectRecord, rejectUnknown } from "../../../../core/validation/input.js";
 
 export type AgentXProfileConfig = {
   provider?: "vllm" | "sglang";
-preset?: "full" | "timeline" | "compute" | "bandwidth" | "cache";
+  serviceNode?: string;
+  preset?: "full" | "timeline" | "compute" | "bandwidth" | "cache";
   devices?: number[];
   nodeMetrics?: { endpoint: string; names: string[] };
   analysisPython?: string;
@@ -25,7 +26,7 @@ export function parseEngineMetrics(value: unknown): string[] {
 
 export function parseProfileConfig(value: unknown, defaultProvider?: "vllm"): AgentXProfileConfig {
   const v = expectRecord(value, "agentx.profiling");
-  rejectUnknown(v, ["traceDirectory", "service", "traceCount", "exportTimeoutSeconds", "provider", "preset", "devices", "nodeMetrics", "analysisPython", "samplerPython"], "agentx.profiling");
+  rejectUnknown(v, ["traceDirectory", "service", "traceCount", "exportTimeoutSeconds", "provider", "preset", "devices", "nodeMetrics", "analysisPython", "samplerPython", "serviceNode"], "agentx.profiling");
   const traceDirectory = expectNonEmptyString(v.traceDirectory, "profiling.traceDirectory");
   if (!(isAbsolute(traceDirectory) || posix.isAbsolute(traceDirectory)) || /[\r\n\0]/u.test(traceDirectory) || traceDirectory.split(/[/\\]/u).includes(".."))
     throw new TypeError("profiling.traceDirectory must be an absolute shared path");
@@ -48,13 +49,22 @@ export function parseProfileConfig(value: unknown, defaultProvider?: "vllm"): Ag
       throw new TypeError("profiling.nodeMetrics.endpoint must be a credential-free HTTP(S) exporter URL");
     nodeMetrics = { endpoint, names: parseEngineMetrics(node.names) };
   }
-  return { traceDirectory, ...(provider ? { provider } : {}), ...(preset ? { preset } : {}),
+  if (v.serviceNode !== undefined && (typeof v.serviceNode !== "string" || !/^[A-Za-z0-9][A-Za-z0-9.@_-]*$/u.test(v.serviceNode))) throw new TypeError("profiling.serviceNode must be an SSH alias");
+  return { traceDirectory, ...(v.serviceNode ? { serviceNode: v.serviceNode } : {}), ...(provider ? { provider } : {}), ...(preset ? { preset } : {}),
     ...(devices ? { devices } : {}), ...(nodeMetrics ? { nodeMetrics } : {}),
     ...(v.samplerPython === undefined ? {} : { samplerPython: expectNonEmptyString(v.samplerPython, "profiling.samplerPython") }),
     ...(v.analysisPython === undefined ? {} : { analysisPython: expectNonEmptyString(v.analysisPython, "profiling.analysisPython") }),
     exportTimeoutSeconds: expectPositiveInteger(v.exportTimeoutSeconds ?? 1800, "profiling.exportTimeoutSeconds"),
     ...(v.traceCount === undefined ? {} : { traceCount: expectPositiveInteger(v.traceCount, "profiling.traceCount") }),
     ...(v.service === undefined ? {} : { service: expectNonEmptyString(v.service, "profiling.service") }) };
+}
+
+export function serviceProfileMeasurements(profile?: AgentXProfileConfig): string[] {
+  if (!profile) return [];
+  const preset = profile.preset ?? "timeline";
+  if (preset === "full" || preset === "timeline") return ["execution/operators", "execution/runtime", "parallelism/communication",
+    "parallelism/timeline", "resource/npu", "hardware/hbm", "hardware/pmu", "hardware/cache", ...(preset === "full" || profile.nodeMetrics ? ["resource/host"] : [])];
+  return [{ compute: "hardware/pmu", bandwidth: "hardware/hbm", cache: "hardware/cache" }[preset]];
 }
 
 export function parseCollection(value: unknown): AgentXCollection {

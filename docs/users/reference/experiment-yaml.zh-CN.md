@@ -48,6 +48,10 @@ Claude Code 等使用 Evaluator Messages 转发层的 CLI 只需设置 `model`�
 | --- | --- | --- | --- |
 | `benchmark.name` | 非空字符串 | 使用对象写法时必填 | 选择已注册的 Benchmark 或 Benchmark Profile。`benchmark: gsm8k` 是 `benchmark: { name: gsm8k }` 的简写。 |
 | `benchmark.version` | 非空字符串 | 可选，采用 Profile 的 `defaultVersion`（如有） | 使用所选 Profile 声明的版本。给 `"1.0"` 这类版本号加引号。 |
+| `target` | 字符串 | 可选 | 引用 `targets.yaml` 或 `EVALUATOR_TARGETS` 指定文件中的推理目标。[配置示例](../benchmarks/inference-workloads.zh-CN.md) |
+| `benchmark.workload` | 对象 | 可选 | 通过 `type` 选择工具的负载。 |
+| `benchmark.concurrency` | 正整数列表 | 结构化负载默认 `[1]`，原生入口采用原生并发 | 每档单独运行并保存结果。 |
+| `benchmark.collect` | performance、profiling、all | 新负载写法默认 performance | 选择正式轮、诊断轮或两轮。 |
 | `benchmark.scenario` | 非空字符串 | 可选，采用 Profile 的 `defaultScenario`（如有） | 使用所选 Profile 声明的场景。 |
 | `benchmark.evaluationScenario` | `task` 或 `inference-engine` | 可省略，由 Benchmark Profile 选择 | 控制结果目录。GSM8K 按题保存。AgentX 和 AISBench 压测按并发保存。AISBench 原生模式只制数或校验数据时按任务保存。 |
 | `benchmark.config` | 对象 | 可选，由 Profile 提供或为空对象 | 所选 Benchmark 的专属参数。 |

@@ -17,7 +17,7 @@ export function aisbenchBaseUrl(endpoint: string): string {
 }
 export function sshArguments(config: SshConfig): string[] {
   return ["-T", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes", "-o", "ConnectTimeout=15", "-o", "ServerAliveInterval=10", "-o", "ServerAliveCountMax=2",
-    "-p", String(config.port), ...(config.identityFile ? ["-i", config.identityFile] : []), `${config.user}@${config.host}`];
+    ...(config.port ? ["-p", String(config.port)] : []), ...(config.identityFile ? ["-i", config.identityFile] : []), config.user ? `${config.user}@${config.host}` : config.host];
 }
 export type SshTransport = (command: string, request: unknown, signal: AbortSignal) => Promise<unknown>;
 export function openSsh(config: SshConfig): SshTransport {
@@ -54,6 +54,14 @@ export class AisbenchRemoteClient {
   constructor(readonly config: AisbenchSshConfig, readonly digest: string, transport?: SshTransport) {
     this.transport = transport ?? openSsh(config.remote.ssh);
     this.bundleDirectory = posix.join(config.remote.workRoot, "bundles", digest);
+  }
+  static async connect(config: AisbenchSshConfig, digest: string, signal: AbortSignal) {
+    if (config.remote.workRoot !== "auto") return new AisbenchRemoteClient(config, digest);
+    const transport = openSsh(config.remote.ssh);
+    const script = "import json,pathlib; print(json.dumps(str(pathlib.Path.home() / '.cache/arsi-evaluator/aisbench')))";
+    const root = await transport(shellQuote(config.remote.pythonExecutable) + " -c " + shellQuote(script), {}, signal);
+    if (typeof root !== "string" || !posix.isAbsolute(root)) throw new Error("Cannot resolve AISBench remote cache directory");
+    return new AisbenchRemoteClient({ ...config, remote: { ...config.remote, workRoot: root } }, digest, transport);
   }
   async deploy(signal: AbortSignal): Promise<void> {
     await this.transport(`${shellQuote(this.config.remote.pythonExecutable)} -c ${shellQuote(bootstrap)}`, { directory: this.bundleDirectory, files: await bundleFiles() }, signal);

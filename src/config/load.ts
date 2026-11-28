@@ -13,6 +13,7 @@ import { parseJobsConfig } from "./jobs.js";
 import { redactConfig } from "./redact.js";
 import { parseEffectiveConfig, parseModel } from "./effective.js";
 import { parseUserConfig } from "./user-schema.js";
+import { bindInferenceTarget } from "./inference-target.js";
 import { resolveInput, type ConfigOrigins } from "./resolve.js";
 import { assertJsonValue, expectRecord, expectNonEmptyString } from "../core/validation/input.js";
 import { assertServiceBindings } from "../core/policies/service-bindings.js";
@@ -164,9 +165,19 @@ export async function readConfig(
   const source = expectRecord(parse(await readFile(absolutePath, "utf8"), { maxAliasCount: 100 }), "configuration");
   const registry = options.registry;
   {
-    const user = parseUserConfig(source);
+    const target = await bindInferenceTarget(source, absolutePath, env);
+    const user = parseUserConfig(target.source);
     const benchmarkName = typeof user.benchmark === "string" ? user.benchmark : user.benchmark.name;
     const { source: normalized, origins } = resolveInput(absolutePath, user, registry.profiles(), overrides);
+    if (typeof user.benchmark !== "string" && user.benchmark.workload) {
+      const b = user.benchmark;
+      origins["benchmark.workload.type"] = String(b.workload?.type);
+      origins["benchmark.config.measurementMode"] = b.collect === undefined ? "workload default" : "benchmark.collect";
+      if (b.concurrency) origins["benchmark.config.concurrency"] = "benchmark.concurrency";
+      if (b.workload?.args) origins["benchmark.config.nativeArgs"] = "benchmark.workload.args";
+      if (b.workload?.file) origins["benchmark.config.configFile"] = "benchmark.workload.file";
+    }
+    if (target.name) origins.target = `target ${target.name} in ${target.path}`;
     const loaded = loadResolvedConfig(normalized, absolutePath, overrides, env, options, origins, registry);
     return attachNetwork(loaded, network, benchmarkName);
   }
@@ -236,6 +247,15 @@ function loadResolvedConfig(
   const { services: _services, ...publicConfig } = normalized;
   const expanded = expectRecord(expandVariables(publicConfig, variables), "configuration");
   const experiment = parseEffectiveConfig({ ...expanded, services });
+  const profile = experiment.benchmark.config.profiling;
+  if (origins["benchmark.workload.type"] && profile !== undefined) {
+    const alias = expectRecord(profile, "profiling").service;
+    if (typeof alias === "string" && (services[alias]?.endpoint !== services[solverService]?.endpoint || services[alias]?.name !== services[solverService]?.name))
+      throw new TypeError("benchmark.config.profiling.service must identify the same model endpoint as benchmark.solver.service");
+  }
+  const nativeArgs = experiment.benchmark.config.nativeArgs;
+  if (Array.isArray(nativeArgs) && nativeArgs.some(arg => typeof arg === "string" && Object.values(auths).some(auth => auth.value.length >= 4 && arg.includes(auth.value))))
+    throw new TypeError("benchmark.workload.args contains service credentials; use the target service binding");
   if (deployment) {
     const { kind: _kind, ...connection } = deployment;
     parseJobsConfig({ ...connection, ...experiment.scheduler.config });

@@ -10,6 +10,7 @@ import { JobsClient } from "../../infrastructure/ray/jobs-client.js";
 import { parseJobsConfig } from "../../config/jobs.js";
 import { resolveAgentXPython } from "../../runtimes/agentx/runtime.js";
 import { checkHostTelemetry } from "../../runtimes/agentx/host-telemetry.js";
+import { diagnoseInference } from "./inference.js";
 import { parseTelemetryConfig } from "../../plugins/benchmarks/inference-engine/agentx/evidence/telemetry.js";
 
 type Check = { name: string; status: "passed" | "failed" | "not-checked"; detail: string };
@@ -45,7 +46,7 @@ export async function diagnose(config: LoadedConfig, file: string, signal: Abort
   } else {
     const env = config.experiment.environment;
     if (env.name === "docker" && config.experiment.scheduler.name !== "ray") await executable(String(env.config.dockerExecutable ?? "docker"), ["version", "--format", "{{.Server.Version}}"]);
-    if (config.experiment.solver.name === "agentx-replay" && env.name === "local")
+    if (config.experiment.solver.name === "agentx-replay" && env.name === "local" && !config.experiment.solver.config.loadNode)
       await check("AgentX Python", () => resolveAgentXPython(
         typeof config.experiment.solver.config.pythonExecutable === "string" ? config.experiment.solver.config.pythonExecutable : undefined, signal));
     if (config.experiment.solver.name === "agentx-replay" && ["local", "docker"].includes(env.name) && config.experiment.solver.config.telemetry !== undefined) {
@@ -75,6 +76,7 @@ export async function diagnose(config: LoadedConfig, file: string, signal: Abort
       });
       else checks.push({ name: "Ray cluster", status: "not-checked", detail: "auto/local clusters are not started during diagnostics" });
     }
+    await diagnoseInference(config, signal, check);
     const solver = config.experiment.solver;
     const bundlePath = solver.config.path;
     if (config.experiment.scheduler.name !== "ray" && solver.name === "agentbundle" && typeof bundlePath === "string") await check("AgentBundle path", () => access(resolve(directory, bundlePath)));

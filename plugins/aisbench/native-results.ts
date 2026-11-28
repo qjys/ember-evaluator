@@ -1,6 +1,6 @@
 import { glob, readFile } from "node:fs/promises";
 import { dirname, join, posix } from "node:path";
-import type { JsonValue, Metrics, Reporter, ResultSnapshot } from "arsi-evaluator";
+import type { AttemptRecord, JsonValue, Metrics, Reporter, ResultSnapshot } from "arsi-evaluator";
 import { parseCsv } from "./ssh/csv.js";
 import { pointStatus, recordsByTask } from "./metrics.js";
 import { expectRecord } from "./validation.js";
@@ -92,6 +92,37 @@ export async function readNativeGroups(root: string, concurrency?: number[], exp
   return [...groups.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([, group]) => group);
 }
 
+function phaseResults(record: AttemptRecord | undefined, taskId: string, digest: unknown) {
+  if (!record) return;
+  const steps = record.steps ?? [{ name: "", solve: record.solve, verdict: record.verdict, errors: record.errors }];
+  const groups: JsonValue[] = [], collections: JsonValue[] = [];
+  let managed = false, formal = false;
+  for (const step of steps) {
+    const raw = step.solve?.observations;
+    const data = raw && typeof raw === "object" && !Array.isArray(raw) ? raw : undefined;
+    const phase = step.name || data?.phase;
+    if (phase !== "profiling" && phase !== "performance") continue;
+    managed = true;
+    if (phase === "performance") formal = true;
+    if (!data || !step.verdict || step.errors.length) {
+      if (phase === "profiling") collections.push({ dataset: "diagnostic", profiling: { status: "failed", error: step.errors.map(e => e.message).join(", ") || "Incomplete diagnostic" } });
+      continue;
+    }
+    if (data.phase !== phase || data.kind !== "aisbench-native" || data.taskId !== taskId || data.bundleDigest !== digest || !Array.isArray(data.groups))
+      throw new TypeError("Invalid AISBench phase evidence");
+    if (phase === "performance") groups.push(...data.groups);
+    if (Array.isArray(data.collections)) collections.push(...data.collections);
+  }
+  if (!managed) return;
+  const success = (!formal || groups.length > 0) && groups.every(g => expectRecord(g, "group").status === "measured") &&
+    collections.every(c => { const p = expectRecord(c, "collection"); return [p.engine, p.profiling].every(s => s === undefined || expectRecord(s, "section").status === "measured"); });
+  const state = pointStatus(record);
+  if (record.steps && !record.steps.some(s => s.name === "profiling"))
+    collections.push({ dataset: "diagnostic", profiling: { status: "skipped", error: "Formal measurement did not complete" } });
+  return { taskId, status: state === "completed" && (groups.length || collections.length) && success ? "measured"
+    : groups.length || collections.length ? "partial" : state, groups, collections, managed: true };
+}
+
 export class NativePerformanceMetrics implements Metrics {
   readonly measurementFiles = aisbenchMeasurementFiles;
   readonly name = "aisbench-native-performance";
@@ -99,9 +130,11 @@ export class NativePerformanceMetrics implements Metrics {
     if (snapshot.run.evaluationKind !== "performance" || snapshot.run.source?.source !== "aisbench:native") return { applicable: false, points: [] };
     const records = recordsByTask(snapshot);
     const digest = expectRecord(snapshot.run.source.metadata, "AISBench source").bundleDigest;
-    const points = snapshot.run.taskIds.map(taskId => {
+    const points = snapshot.run.taskIds.map((taskId): { taskId: string; status: string; groups: JsonValue[]; collections?: JsonValue[]; manifestPath?: string; managed?: boolean } => {
       const record = records.get(taskId);
       const status = pointStatus(record);
+      const phases = phaseResults(record, taskId, digest);
+      if (phases) return phases;
       if (status !== "completed") return { taskId, status, groups: [] };
       const evidence = expectRecord(record?.solve?.observations, "native AISBench evidence");
       if (evidence.kind !== "aisbench-native" || evidence.schemaVersion !== 1 || evidence.bundleDigest !== digest ||
@@ -137,7 +170,7 @@ export class NativeMarkdownReporter implements Reporter {
       const root = snapshot.run.resultLayout ? measurementDirectory(snapshot.run.resultLayout.points[point.taskId]) + "/" : "";
       lines.push(`## ${escaped(point.taskId)} · ${escaped(point.status)}`, "");
       if (point.manifestPath) lines.push(`远端多模态数据清单 ${escaped(point.manifestPath)}`, "");
-      else if (!point.groups.length) lines.push("未取得可识别的原生性能测量。请查看该测量点的日志和 outputs 目录。", "");
+      else if (!point.groups.length && !point.collections?.some(c => expectRecord(c, "collection").profiling)) lines.push("未取得可识别的原生性能测量。请查看该测量点的日志和 outputs 目录。", "");
       for (const value of point.groups) {
         const group = expectRecord(value, "native performance group");
         lines.push(`### ${escaped(String(group.model))} / ${escaped(String(group.dataset))}`, "",
@@ -159,15 +192,18 @@ export class NativeMarkdownReporter implements Reporter {
       }
       for (const item of ("collections" in point ? point.collections : undefined) ?? []) {
         const p = expectRecord(item, "AISBench service point");
-        lines.push(`### 服务端采集 · ${escaped(String(p.dataset))} · 并发 ${escaped(String(p.concurrency))}`, "");
+        const title = point.managed ? (p.profiling ? "诊断轮" : "正式轮") : "服务端采集";
+        lines.push(`### ${title} · ${escaped(String(p.dataset ?? "—"))} · 并发 ${escaped(String(p.concurrency ?? "—"))}`, "");
         if (p.error) lines.push(escaped(String(p.error)), "");
         if (p.engine) {
           const engine = expectRecord(p.engine, "engine metrics");
+          const window = expectRecord(engine.window ?? {}, "engine window");
           lines.push(`推理引擎指标 · ${escaped(String(engine.status))}`, "",
-            "| 服务端指标 | 压测前 | 压测后 | 计数器增量 |", "| --- | ---: | ---: | ---: |");
+            "| 服务端指标 | 压测前 | 窗口均值 | 窗口峰值 | 压测后 | 计数器增量 |", "| --- | ---: | ---: | ---: | ---: | ---: |");
           for (const raw of Array.isArray(engine.series) ? engine.series : []) {
             const row = expectRecord(raw, "engine metric");
-            lines.push("| " + [row.series, row.before, row.after, row.delta].map(v => escaped(String(v ?? "—"))).join(" | ") + " |");
+            const samples = expectRecord(window[String(row.series)] ?? {}, "engine samples");
+            lines.push("| " + [row.series, row.before, samples.mean, samples.peak, row.after, row.delta].map(v => escaped(String(v ?? "—"))).join(" | ") + " |");
           }
           lines.push("");
           if (Array.isArray(engine.missing) && engine.missing.length) lines.push("缺少指标 " + escaped(engine.missing.join(", ")), "");
@@ -177,10 +213,18 @@ export class NativeMarkdownReporter implements Reporter {
           const profile = expectRecord(p.profiling, "profiling");
           lines.push(`Ascend profiling · ${escaped(String(profile.status))}`, "");
           if (profile.error) lines.push(escaped(String(profile.error)), "");
+          if (profile.categories) {
+            lines.push("| 诊断指标 | 采集状态 | 数据来源或缺失原因 |", "| --- | --- | --- |");
+            for (const [name, raw] of Object.entries(expectRecord(profile.categories, "profiling categories"))) {
+              const category = expectRecord(raw, "profiling category");
+              lines.push("| " + [name, category.status, category.reason ?? category.source].map(v => escaped(String(v ?? "—"))).join(" | ") + " |");
+            }
+            lines.push("");
+          }
           if (profile.traceDirectory) lines.push("服务端 trace 目录 " + escaped(String(profile.traceDirectory)), "");
           for (const raw of Array.isArray(profile.exports) ? profile.exports : []) {
             const rank = expectRecord(raw, "Ascend export");
-            lines.push("导出文件 " + escaped(root + String(rank.artifactDirectory)), "",
+            lines.push("导出文件 " + escaped(root + (point.managed ? "profiling/" : "") + String(rank.artifactDirectory)), "",
               "| 设备证据 | 算子设备耗时 (µs) | 算子 Host 耗时 (µs) | Kernel 数 | Kernel 执行 (µs) | Kernel 等待 (µs) |",
               "| --- | ---: | ---: | ---: | ---: | ---: |",
               "| " + [rank.deviceEvidence, rank.operatorDeviceUs, rank.operatorHostUs, rank.kernelCount, rank.kernelDurationUs,

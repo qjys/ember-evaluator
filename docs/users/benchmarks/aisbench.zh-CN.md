@@ -2,6 +2,8 @@
 
 > [English](./aisbench.md) | 中文
 
+日常实验可以通过 `target`、`workload`、`concurrency` 和 `collect` 选择负载和采集模式。[推理引擎压测配置](./inference-workloads.zh-CN.md)
+
 AISBench 随 Evaluator 发布，CLI 和 SDK 默认注册。
 
 安装、配置、执行、离线报告与限制统一见 [AISBench 插件说明](../../../plugins/aisbench/README.md)。
