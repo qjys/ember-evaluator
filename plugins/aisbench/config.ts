@@ -41,7 +41,7 @@ export function parseWorkload(value: unknown): AisbenchWorkload {
     prefixCache: { enabled, warmup, prefixRatio: ratio, seed, prefixCount: expectPositiveInteger(c.prefixCount ?? 1, "prefixCount"), dp: expectPositiveInteger(c.dp ?? 1, "dp") } };
 }
 export type SshConfig = { host: string; user: string; port: number; identityFile?: string };
-export type AisbenchSshConfig = { remote: { ssh: SshConfig; pythonExecutable: string; aisbenchWorkPath: string; aisbenchVersion: string; workRoot: string; pollIntervalSeconds: number }; tokenizerPath: string; podInfo: string[] };
+export type AisbenchSshConfig = { remote: { ssh: SshConfig; pythonExecutable: string; aisbenchWorkPath?: string; workingDirectory?: string; aisbenchVersion: string; workRoot: string; pollIntervalSeconds: number }; tokenizerPath?: string; podInfo: string[] };
 function absolute(value: unknown, name: string): string {
   const text = expectNonEmptyString(value, name);
   if (!posix.isAbsolute(text) || /[\r\n\0]/u.test(text) || text.split("/").includes("..")) throw new TypeError(`${name} must be an absolute remote POSIX path without traversal`);
@@ -51,7 +51,7 @@ export function parseAisbenchSshConfig(value: unknown): AisbenchSshConfig {
   const v = expectRecord(value, "aisbench-ssh");
   rejectUnknown(v, ["remote", "tokenizerPath", "podInfo"], "aisbench-ssh");
   const r = expectRecord(v.remote, "remote");
-  rejectUnknown(r, ["ssh", "pythonExecutable", "aisbenchWorkPath", "aisbenchVersion", "workRoot", "pollIntervalSeconds"], "remote");
+  rejectUnknown(r, ["ssh", "pythonExecutable", "aisbenchWorkPath", "workingDirectory", "aisbenchVersion", "workRoot", "pollIntervalSeconds"], "remote");
   const s = expectRecord(r.ssh, "ssh");
   rejectUnknown(s, ["host", "port", "user", "identityFile"], "ssh");
   const host = expectNonEmptyString(s.host, "ssh.host"), user = expectNonEmptyString(s.user, "ssh.user");
@@ -67,8 +67,9 @@ export function parseAisbenchSshConfig(value: unknown): AisbenchSshConfig {
   const workRoot = absolute(r.workRoot, "workRoot");
   if (workRoot === "/") throw new TypeError("workRoot must not be root");
   return { remote: { ssh: { host, user, port, ...(s.identityFile === undefined ? {} : { identityFile: expectNonEmptyString(s.identityFile, "identityFile") }) },
-    pythonExecutable: absolute(r.pythonExecutable, "pythonExecutable"), aisbenchWorkPath: absolute(r.aisbenchWorkPath, "aisbenchWorkPath"), workRoot, aisbenchVersion, pollIntervalSeconds },
-    tokenizerPath: absolute(v.tokenizerPath, "tokenizerPath"), podInfo: podInfo.map(p => expectNonEmptyString(p, "podInfo")) };
+    pythonExecutable: absolute(r.pythonExecutable, "pythonExecutable"), ...(r.aisbenchWorkPath === undefined ? {} : { aisbenchWorkPath: absolute(r.aisbenchWorkPath, "aisbenchWorkPath") }),
+    ...(r.workingDirectory === undefined ? {} : { workingDirectory: absolute(r.workingDirectory, "workingDirectory") }), workRoot, aisbenchVersion, pollIntervalSeconds },
+    ...(v.tokenizerPath === undefined ? {} : { tokenizerPath: absolute(v.tokenizerPath, "tokenizerPath") }), podInfo: podInfo.map(p => expectNonEmptyString(p, "podInfo")) };
 }
 
 export type AisbenchConfig = { workload: AisbenchWorkload };

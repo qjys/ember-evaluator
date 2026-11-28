@@ -1,7 +1,7 @@
 import type { AttemptRecord, JsonValue, MetricResults, ReportContext, Reporter, ResultSnapshot } from "arsi-evaluator";
 import { AisbenchPerformanceMetrics, readAisbenchMetric } from "./metrics.js";
 
-function escaped(value: string): string {
+export function escaped(value: string): string {
   return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")
     .replace(/[\\`*_\[\]()|~#]/gu, "\\$&").replace(/[\r\n\u2028\u2029]+/gu, " ");
 }

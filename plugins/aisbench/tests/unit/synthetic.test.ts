@@ -20,6 +20,6 @@ test("synthetic workload identifies its source and requires full measured token 
 });
 
 test("native synthetic configuration and CSV parsing without AISBench or a model", () => {
-  const result = spawnSync("python3", ["-B", fileURLToPath(new URL("../fixtures/check-synthetic.py", import.meta.url))], { encoding: "utf8" });
+  const result = spawnSync(process.platform === "win32" ? "python" : "python3", ["-X", "utf8", "-B", fileURLToPath(new URL("../fixtures/check-synthetic.py", import.meta.url))], { encoding: "utf8" });
   expect(result.status, result.stdout + result.stderr).toBe(0);
 });

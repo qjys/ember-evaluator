@@ -23,7 +23,7 @@ async function load(): Promise<void> {
 beforeAll(async () => {
   await mkdir(scratch, { recursive: true });
   directory = await mkdtemp(join(scratch, "resource-build-"));
-  for (const name of ["index.ts", "config.ts", "validation.ts", "benchmark.ts", "solver.ts", "evidence.ts", "metrics.ts", "reporter.ts", "resources.json", "package.json", "ssh", "scripts", "profiles", "runtime"]) {
+  for (const name of ["index.ts", "config.ts", "validation.ts", "benchmark.ts", "solver.ts", "native-benchmark.ts", "native-config.ts", "native-results.ts", "evidence.ts", "metrics.ts", "reporter.ts", "resources.json", "package.json", "ssh", "scripts", "profiles", "runtime"]) {
     await cp(join(pluginRoot, name), join(directory, name), { recursive: true });
   }
   entryFingerprint = await build();

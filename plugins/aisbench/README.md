@@ -4,7 +4,17 @@
 
 本插件随 Evaluator 构建和发布，由 CLI 和 SDK 默认注册。插件只依赖 `arsi-evaluator` 包根公开 API。
 
+## 选择场景
+
+默认场景使用固定长度 GSM8K / synthetic 负载。选择 `scenario: native` 可直接使用远端 AISBench 安装的文本、图像等数据集，在同一份 YAML 设置并发、请求数、持续压测和生成参数。完整示例见 [TextVQA 压测](playbook/02-native-textvqa.yaml)，字段映射和自定义多模态 JSONL 示例见[原生压测配置](../../docs/users/benchmarks/aisbench.zh-CN.md#用-yaml-运行原生压测)。
+
+[原生多模态制数示例](playbook/03-generated-multimodal.yaml)组合单图 1080p、五图 720p 与并发 1、8。报告按四个组合展示，支持在正式压测前单独生成、保存并校验请求清单。
+
+[服务端 profiling 示例](playbook/04-service-profiling.yaml)在正式压测后复用同一数据采集 SGLang Ascend 算子耗时，支持单服务和独立诊断服务。
+
 ## 安装和构建
+
+需要按图片规格、文本长度和请求数生成负载时，使用[生成多模态数据示例](playbook/03-generated-multimodal.yaml)。压测机安装 AISBench 官方 Prefix Cache 插件后，Evaluator 会在同一远端作业内生成一次数据，再逐档测量。[制数配置说明](../../docs/users/benchmarks/aisbench.zh-CN.md#按图片规格生成数据)
 
 需要 Node.js 24.22.1（24.x）及 pnpm 11.22.0，宿主版本 `0.1.0`。在仓库根目录执行：
 
@@ -59,6 +69,8 @@ arsi-evaluator run plugins/aisbench/playbook/01-ssh.yaml
 这些参数控制负载，不会打开服务端缓存，也不保证实际命中率。测量命中率时填写 `benchmark.solver.config.podInfo`，其值为远端可访问的 vLLM 指标节点 `host:port`，与模型 API 地址分开。缺少指标不会伪造结果。不启用公共前缀时将 `enabled`、`warmup` 设为 false，并删除 `prefixRatio` 或设为 0。目前支持生成负载的性能模式，不支持任意数据集或精度评测。
 
 ## 恢复、产物和离线报告
+
+每次 attempt 的 `agent/session.jsonl` 记录 SSH 作业的配置指纹、启动确认、轮询观察到的状态变化和退出码。`agent/trajectory.jsonl` 记录 Solver 的开始时间，以及成功下载并解析性能结果后的结束时间。中断时可结合 `agent/remote.log` 定位最后执行的阶段。请求时延和整组吞吐见 AISBench 性能产物。
 
 远端 supervisor 独立于单次 SSH 连接，Evaluator 轮询阶段、心跳和增量日志。相同 run/task 续跑检查配置指纹，连接仍在运行的任务；远端已完成时重新下载。正常失败或已取消任务在新 attempt 中重启，旧产物归档到远端 history。`supervisor-lost` 不自动重启，需先确认远端是否仍有压测进程。
 

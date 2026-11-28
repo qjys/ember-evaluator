@@ -2,6 +2,7 @@
 import base64
 import fcntl
 import hashlib
+import html
 import importlib.metadata
 import json
 import os
@@ -38,7 +39,12 @@ def identity(pid):
 
 
 def redact(text, secret):
-    return text.replace(secret, "[REDACTED]") if secret else text
+    secrets = secret if isinstance(secret, list) else [secret]
+    forms = {form for key in secrets if key for form in
+             (key, json.dumps(key)[1:-1], json.dumps(key, ensure_ascii=False)[1:-1], repr(key)[1:-1], html.escape(key))}
+    for form in sorted(forms, key=len, reverse=True):
+        text = text.replace(form, "[REDACTED]")
+    return text
 
 
 def status(root, offset=0):
@@ -87,6 +93,9 @@ def isolated_install(source, target):
 
 
 def prepare(root, config):
+    if "native" in config:
+        from native import prepare_run
+        return prepare_run(root, config)
     if config["workload"].get("dataset") == "synthetic":
         from synthetic import prepare_run
         return prepare_run(root, config)
@@ -127,10 +136,11 @@ def prepare(root, config):
     return run, args, env
 
 
-def collect(root, secret):
+def collect(root, secret, native=False):
     run = root / "run"
     artifacts = root / "artifacts"
-    for name in ["aisbench_result.csv", "aisbench.log", "aisbench_all.log", "aisbench_client.log", "outputs"]:
+    skipped = []
+    for name in ["native-plan.json", "collections.json", "profiling", "aisbench_result.csv", "aisbench.log", "aisbench_all.log", "aisbench_client.log", "outputs"]:
         source = run / name
         if not source.exists() or source.is_symlink():
             continue
@@ -138,14 +148,22 @@ def collect(root, secret):
         for item in entries:
             if not item.is_file() or item.is_symlink():
                 continue
-            # Raw benchmark output is text; binaries could contain unredactable credentials.
-            try:
-                text = item.read_text(encoding="utf-8")
-            except UnicodeError:
+            # Upstream snapshots contain executable config and can embed escaped credentials.
+            relative = item.relative_to(run)
+            if native and ("configs" in relative.parts or item.suffix.lower() not in {".csv", ".json", ".jsonl", ".log", ".out", ".txt", ".md", ".html", ".yaml", ".yml"}):
+                skipped.append({"path": relative.as_posix(), "reason": "private config or unsupported format"})
                 continue
-            dest = artifacts / item.relative_to(run)
+            dest = artifacts / relative
             dest.parent.mkdir(parents=True, exist_ok=True)
-            dest.write_text(redact(text, secret), encoding="utf-8")
+            try:
+                with item.open(encoding="utf-8") as source_file, dest.open("w", encoding="utf-8") as output:
+                    for line in source_file:
+                        output.write(redact(line, secret))
+            except UnicodeError:
+                dest.unlink(missing_ok=True)
+                skipped.append({"path": relative.as_posix(), "reason": "not UTF-8"})
+    if native:
+        atomic(artifacts / "collection.json", {"skipped": skipped})
 
 
 def cleanup_private(root):
@@ -168,7 +186,7 @@ def supervise(root):
     stopped = threading.Event()
     cancelled = threading.Event()
     child = None
-    secret = config.get("apiKey", "")
+    secret = [config.get("apiKey"), config.get("profileApiKey")]
     def heartbeat():
         while not stopped.wait(2):
             state["heartbeat"] = time.time()
@@ -186,14 +204,14 @@ def supervise(root):
         if cancelled.is_set() or (root / "cancelled").exists():
             cancelled.set()
             return
-        state["phase"] = "generating-data"
+        state["phase"] = "benchmark" if "native" in config and "multimodalGeneration" not in config["native"] else "generating-data"
         child = subprocess.Popen(args, cwd=run, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         with (root / "artifacts/runner.log").open("a", encoding="utf-8") as log:
             for line in iter(child.stdout.readline, b""):
                 text = line.decode("utf-8", errors="replace")
                 if "[开始] 前缀数据集测试" in text:
                     state["phase"] = "warmup"
-                elif "[开始] 全量数据集测试" in text:
+                elif "[开始] 全量数据集测试" in text or text.strip() == "AISBench multimodal dataset prepared":
                     state["phase"] = "benchmark"
                 log.write(redact(text, secret))
                 log.flush()
@@ -205,7 +223,7 @@ def supervise(root):
         stopped.set()
         thread.join()
         try:
-            collect(root, secret)
+            collect(root, secret, native="native" in config)
         except Exception as error:
             code = -1
             try:

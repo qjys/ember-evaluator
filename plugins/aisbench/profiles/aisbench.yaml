@@ -30,3 +30,9 @@ defaults:
       concurrency: 1
 scenarios:
   standard: {}
+  native:
+    plugin:
+      name: aisbench-native
+    defaults:
+      metrics: [aisbench-native-performance, duration, usage]
+      reporter: aisbench-native-markdown

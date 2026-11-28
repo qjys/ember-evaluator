@@ -1,0 +1,30 @@
+services:
+  default:
+    model: ${MODEL_NAME}
+    base_url: ${MODEL_ENDPOINT}
+    api_key: ${MODEL_API_KEY}
+benchmark:
+  name: aisbench
+  scenario: native
+  config:
+    backend: vllm_api_general_chat
+    multimodalGeneration:
+      imageScenario: [single_1080p, multi_720p_5]
+      textTokens: 32
+      mmmuParquetDir: /data/MMMU
+    dataCount: 16
+    maxOutputTokens: 32
+    concurrency: [1, 8]
+    stream: true
+    warmups: 0
+  solver:
+    name: aisbench-ssh
+    config:
+      tokenizerPath: /data/tokenizers/vl
+      remote:
+        ssh: { host: benchmark-server, user: benchmark }
+        pythonExecutable: /opt/conda/envs/aisbench/bin/python
+        aisbenchVersion: ${AISBENCH_VERSION}
+        workRoot: /data/evaluator/aisbench
+output:
+  directory: ../../../results/aisbench-generated-multimodal

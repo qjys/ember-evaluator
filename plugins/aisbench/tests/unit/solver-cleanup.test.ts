@@ -26,6 +26,11 @@ test.each([true, false])("transport failure reconciles remote ownership; termina
   try {
     await expect(solver.solve({ id: "task", prompt: "fixture", payload: { kind: "aisbench", schemaVersion: 1, workload: parseWorkload({}), bundleDigest: await bundleDigest() } }, session, { key: { runId: "run", taskId: "task", attemptId: "attempt" }, paths: { root: directory, agent: join(directory, "agent"), artifacts: join(directory, "artifacts"), verifier: join(directory, "verifier") }, signal: new AbortController().signal })).rejects.toThrow("transport disconnected");
     expect(call.mock.calls.map(args => args[0])).toEqual(["start", "cancel"]);
+    const trajectory = await readFile(join(directory, "agent/trajectory.jsonl"), "utf8");
+    expect(trajectory.trimEnd().split("\n").map(line => JSON.parse(line).type)).toEqual(["start"]);
+    const sessionLog = await readFile(join(directory, "agent/session.jsonl"), "utf8");
+    expect(sessionLog.trimEnd().split("\n").map(line => JSON.parse(line).operation)).toEqual(["deploy", "status", "start"]);
+    expect(sessionLog).not.toContain("fixture-secret");
     const marker = readFile(join(directory, "artifacts/aisbench/cleanup-unconfirmed.json"), "utf8");
     if (terminal) await expect(marker).rejects.toMatchObject({ code: "ENOENT" });
     else expect(JSON.parse(await marker).jobDir).toContain("/jobs/");

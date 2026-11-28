@@ -88,6 +88,25 @@ async function checkConfig() {
   } finally { await components.dispose(); }
   await writeFile(experiment, JSON.stringify({ ...config, scheduler: { name: "local", concurrency: 2 } }));
   assert.match(await cli(["run", experiment, "--dry-run"], false), /concurrency=1/iu);
+  const { aisbenchWorkPath: _legacy, ...nativeRemote } = config.benchmark.solver.config.remote;
+  await writeFile(experiment, JSON.stringify({ ...config, benchmark: { name: "aisbench", scenario: "native",
+    config: { backend: "vllm_api_general_chat", datasets: ["textvqa_gen_base64"], concurrency: [1, 8], dataCount: 100 },
+    solver: { config: { remote: nativeRemote, tokenizerPath: "/tokenizer" } } } }));
+  assert.match(await cli(["run", experiment, "--dry-run"]), /aisbench-native-/u);
+  const native = await loadConfig(experiment, {}, {}, { networkConfigPath, allowMissingAuth: true });
+  assert.equal(native.experiment.benchmark.name, "aisbench-native");
+  assert.equal(native.experiment.solver.name, "aisbench-ssh");
+  assert.equal(native.experiment.reporter.name, "aisbench-native-markdown");
+  assert.equal(native.experiment.benchmark.config.workload, undefined);
+  const generated = { name: "aisbench", scenario: "native",
+    config: { backend: "vllm_api_general_chat", concurrency: [1, 8], dataCount: 16,
+      multimodalGeneration: { imageScenario: "multi_720p_5", textTokens: 32, mmmuParquetDir: "/data/MMMU" } },
+    solver: { config: { remote: nativeRemote, tokenizerPath: "/tokenizer" } } };
+  await writeFile(experiment, JSON.stringify({ ...config, benchmark: generated }));
+  assert.match(await cli(["run", experiment, "--dry-run"]), /aisbench-native-/u);
+  delete generated.solver.config.tokenizerPath;
+  await writeFile(experiment, JSON.stringify({ ...config, benchmark: generated }));
+  assert.match(await cli(["run", experiment, "--dry-run"], false), /tokenizerPath/u);
   delete process.env.AISBENCH_OFFLINE_KEY;
 }
 

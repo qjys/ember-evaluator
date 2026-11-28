@@ -2,6 +2,9 @@
   "upstreamRevision": "ac06bd619726663ac8c7b0c84c9b3cdbb041b062",
   "runtime": [
     "remote.py",
+    "native.py",
+    "service_collections.py",
+    "profile_export.py",
     "synthetic.py",
     "upstream/aisbench_test.py",
     "upstream/cal_prefix_hit_rate.py",
