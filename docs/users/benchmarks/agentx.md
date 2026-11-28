@@ -124,11 +124,11 @@ networkLatency: # Under benchmark.solver.config
 
 `meanMs` must be finite/nonnegative. Manual mode performs no TCP probes and disallows `pingIntervalSeconds`; automatic disallows meanMs. Unknown or mixed-mode fields fail before execution.
 
-For runs without service collections, results appear in `result.json` `solve.observations.networkLatency`, `agent/agentx-summary.json`, and metrics.json. Reports show mode, deducted mean RTT, total/success/failed probes, and raw/adjusted TTFT, TTFO, request latency (mean/P50/P95/P99). Adjusted distributions come directly from official `network_adjusted_*` exports, without recomputation. ITL/throughput/existing comparisons retain raw metrics.
+For runs without service collections, results appear in `result.json` `solve.observations.networkLatency`, `performance/agentx-summary.json`, and metrics.json. Reports show mode, deducted mean RTT, total/success/failed probes, and raw/adjusted TTFT, TTFO, request latency (mean/P50/P95/P99). Adjusted distributions come directly from official `network_adjusted_*` exports, without recomputation. ITL/throughput/existing comparisons retain raw metrics.
 
 `complete` means usable RTT and adjusted metrics. Failed/missing probes or missing adjusted metrics yield `partial` with data/warnings retained; no usable RTT/adjusted values yields unavailable. Missing values show `—`, never0. Calibration absence does not replace request success/failure. Pinned harness manual `meanMs: 0` may export no adjusted metrics; report `unavailable` while retaining raw values.
 
-Automatic probes are saved in `profile_export_network_latency.jsonl` inside `artifacts/artifacts.tar`; manual mode has no probe file. Historical results without calibration still report. Offline `report` reads saved data without probes/model access.
+Automatic mode saves individual probes in `performance/outputs/profile_export_network_latency.jsonl`. Manual mode uses the configured RTT. Offline reports read the saved calibration.
 
 Mean TCP RTT estimates network round trips only, not every proxy/transport/client overhead, nor actual throughput/session impacts. See [official calibration definitions](https://github.com/SemiAnalysisAI/agentx-harness/blob/master/docs/metrics-reference.md#network-latency-calibration-metrics).
 
@@ -136,10 +136,10 @@ Mean TCP RTT estimates network round trips only, not every proxy/transport/clien
 
 Each concurrency point has a separate attempt saving:
 
-- Runs without service collections write `agent/agentx-summary.json`. Service collections write their summaries to `performance/agentx-summary.json` or `profiling/agentx-summary.json`. Dual-pass results also store each summary in `steps[].solve.observations`.
+- Each pass writes its summary to `performance/agentx-summary.json` or `profiling/agentx-summary.json`. Dual-pass attempts also store per-step results in `result.json` under `steps[].solve.observations`.
 - `agent/trajectory.jsonl`, `session.jsonl`, and redacted bridge logs.
-- `artifacts/artifacts.tar`: raw harness exports/logs under `agentx-artifacts`, with collectable partial artifacts on failure.
-- replay also saves `agent/replay-coverage.json`, checking trace IDs/original outer-inner coordinates, also included in raw artifacts. Reports count completed traces, captured requests, failures, cancellations, missing/duplicate requests.
+- `performance/outputs/` and `profiling/outputs/` each hold one copy of the raw Harness exports and logs from that pass. Failed and cancelled attempts publish available output and list missing required files in `files.json`.
+- Each replay writes `replay-coverage.json` alongside its raw data to audit trace IDs and original outer/inner request coordinates. The diagnostic warmup session, trajectory and coverage live under `profiling/outputs/warmup/`.
 
 Profiling/warmup are separate. TTFT/ITL/request latency/Interactivity distributions come from official exports; throughput uses harness measurement time. Point percentiles are not merged. Missing values stay unknown; token usage sums only fields available for both warmup/profiling, not provider bills.
 
@@ -295,7 +295,8 @@ Each run writes `report.md` and `metrics.json` for offline use. With `concurrenc
 
 ```text
 tasks/<task-hash>/attempts/<attempt-id>/
-├── performance/       # Formal requests, Harness exports, engine metrics and summary
+├── performance/       # Formal summary and collection status
+│   └── outputs/       # Request records, Harness exports and engine samples
 ├── profiling/
 │   ├── outputs/       # Diagnostic Harness exports and replay coverage
 │   └── trace/         # Service profiler exports and configured hardware samples

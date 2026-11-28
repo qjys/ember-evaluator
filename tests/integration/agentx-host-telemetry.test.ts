@@ -177,7 +177,7 @@ test.each([
     else if (outcome === "cancelled") await expect(promise).rejects.toThrow();
     else expect((await promise).observations).toMatchObject({ telemetry: { sources: [expect.anything(), { kind: "ascend", deviceId: 4, status: "complete" }] } });
     expect(operations).toEqual(["sample", "finish"]);
-    expect(JSON.parse(await readFile(join(paths.agent, "host-telemetry.json"), "utf8"))).toEqual({ localAscend: [target] });
+    expect(JSON.parse(await readFile(join(paths.root, "performance", "host-telemetry.json"), "utf8"))).toEqual({ localAscend: [target] });
   } finally {
     await new Promise<void>((done, fail) => server.close(error => error ? fail(error) : done()));
     await rm(root, { recursive: true, force: true });

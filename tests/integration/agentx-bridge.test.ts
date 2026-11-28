@@ -178,6 +178,17 @@ test.skipIf(!python).each(["standard", "service-collections", "profile-failure"]
       for (const record of snapshot.records) {
         const directory = join(config.experiment.output.directory, snapshot.run.runId, "tasks", safeTaskKey(record.key.taskId),
           "attempts", record.key.attemptId);
+        const manifest: { files: { path: string }[] } = JSON.parse(await readFile(join(directory, "files.json"), "utf8"));
+        const paths = manifest.files.map(entry => entry.path);
+        expect(paths.filter(path => path.endsWith(".tar"))).toEqual([]);
+        for (const name of ["harness.log", "profile_export.jsonl", "profile_export_aiperf.json"]) {
+          expect(paths.filter(path => path.endsWith("/" + name)).sort()).toEqual(
+            (rejected ? ["performance"] : ["performance", "profiling"]).map(phase => phase + "/outputs/" + name));
+        }
+        expect(paths.filter(path => path.endsWith("replay-coverage.json")).sort()).toEqual([
+          "performance/outputs/replay-coverage.json", ...(rejected ? [] : ["profiling/outputs/replay-coverage.json"]),
+          "profiling/outputs/warmup/replay-coverage.json",
+        ]);
         expect(record.steps?.map(step => step.name)).toEqual(["performance", "profiling"]);
         const [performance, profiling] = record.steps ?? [];
         const formal = parseAgentXSummary(performance?.solve?.observations);
@@ -185,7 +196,7 @@ test.skipIf(!python).each(["standard", "service-collections", "profile-failure"]
         expect(formal.profiling.requests?.mean).toBe(56);
         expect(formal.engine).toBeDefined();
         expect(record.solve?.usage).toEqual(performance?.solve?.usage);
-        expect((await stat(join(directory, "performance", "replay-coverage.json"))).size).toBeGreaterThan(0);
+        expect((await stat(join(directory, "performance", "outputs", "replay-coverage.json"))).size).toBeGreaterThan(0);
         const meta = await readFile(join(directory, "profiling", "collections.json"), "utf8");
         expect(meta).not.toContain(ready.key);
         if (rejected) {
@@ -217,6 +228,8 @@ test.skipIf(!python).each(["standard", "service-collections", "profile-failure"]
       const metricsPath = join(runDirectory, "metrics.json");
       const metrics = await readFile(metricsPath, "utf8");
       await components.store.close();
+      await helper.stop(500);
+      await Promise.all([rm(join(runDirectory, "report.md")), rm(metricsPath)]);
       await rebuildReport(runDirectory);
       expect(await readFile(join(runDirectory, "report.md"), "utf8")).toBe(report);
       expect(await readFile(metricsPath, "utf8")).toBe(metrics);
@@ -237,9 +250,9 @@ test.skipIf(!python).each(["standard", "service-collections", "profile-failure"]
     expect(summary.incomparableReasons).toContain("custom_duration");
     expect(summary.networkLatency?.status).toBe("complete");
     expect(summary.networkLatency?.probes?.successful).toBeGreaterThan(0);
-    const archive = join(config.experiment.output.directory, snapshot.run.runId, "tasks", safeTaskKey(record.key.taskId),
-      "attempts", record.key.attemptId, "artifacts", "artifacts.tar");
-    expect((await stat(archive)).size).toBeGreaterThan(0);
+    const raw = join(config.experiment.output.directory, snapshot.run.runId, "tasks", safeTaskKey(record.key.taskId),
+      "attempts", record.key.attemptId, "performance", "outputs", "profile_export_aiperf.json");
+    expect((await stat(raw)).size).toBeGreaterThan(0);
     await saveReport(components.store, components.metrics, components.reporter);
     const runDirectory = join(config.experiment.output.directory, snapshot.run.runId);
     const report = await readFile(join(runDirectory, "report.md"), "utf8");

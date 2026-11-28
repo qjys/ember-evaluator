@@ -125,11 +125,11 @@ networkLatency: # 放在 benchmark.solver.config 下
 
 `meanMs` 必须为非负有限数；手动模式不进行 TCP 探测，不能填写 `pingIntervalSeconds`。自动模式不能填写 `meanMs`。配置未知字段或混用两种模式的参数会在执行前报错。
 
-常规压测的校准结果保存在 `result.json` 的 `solve.observations.networkLatency`、`agent/agentx-summary.json` 及对应 `metrics.json` 中。报告逐测量点显示校准模式、用于扣除的平均 RTT、探测总数/成功数/失败数，以及 TTFT、TTFO 和请求延迟的原始值与修正值（均值、P50、P95、P99）。修正分布直接读取官方 `network_adjusted_*` 导出，不在 Evaluator 中重算。ITL、吞吐和报告原有性能对比表继续使用原始指标。
+常规压测的校准结果保存在 `result.json` 的 `solve.observations.networkLatency`、`performance/agentx-summary.json` 及对应 `metrics.json` 中。报告逐测量点显示校准模式、用于扣除的平均 RTT、探测总数/成功数/失败数，以及 TTFT、TTFO 和请求延迟的原始值与修正值（均值、P50、P95、P99）。修正分布直接读取官方 `network_adjusted_*` 导出，不在 Evaluator 中重算。ITL、吞吐和报告原有性能对比表继续使用原始指标。
 
 `complete` 表示有可用 RTT 和对应修正指标；部分探测失败、探测记录缺失或部分修正指标缺失时记为 `partial`，保留已有数据和告警；没有可用 RTT 或修正指标时记为 `unavailable`。缺失值显示 `—`，不补成 0，也不让网络校准缺失替代请求测评的成功/失败判断。固定版本 Harness 对手动 `meanMs: 0` 可能不导出校准指标，此时明确显示不可用，原始指标仍保留。
 
-自动模式的逐次探测保存在 Harness 产物 `profile_export_network_latency.jsonl`，随 `artifacts/artifacts.tar` 收集；手动模式没有探测文件。旧结果没有网络校准字段时仍能生成报告。离线 `report` 仅读取保存结果，不重新探测或访问模型。
+自动模式的逐次探测保存在 `performance/outputs/profile_export_network_latency.jsonl`。手动模式使用配置的 RTT。离线报告从保存的测量结果读取校准数据。
 
 平均 TCP RTT 校准只估算客户端到端点的网络往返，不能去掉所有代理、传输或客户端开销，也不会改变网络对实际吞吐和会话推进速度的影响。参数和指标定义见[官方网络延时校准说明](https://github.com/SemiAnalysisAI/agentx-harness/blob/master/docs/metrics-reference.md#network-latency-calibration-metrics)。
 
@@ -137,10 +137,10 @@ networkLatency: # 放在 benchmark.solver.config 下
 
 每个并发点对应独立 attempt，保存：
 
-- 常规压测的版本化摘要在 `agent/agentx-summary.json`。使用服务指标或诊断采集时，相应轮次的摘要在 `performance/agentx-summary.json` 或 `profiling/agentx-summary.json`。双轮运行在 `result.json` 的 `steps[].solve.observations` 保存逐轮摘要。
+- 每轮摘要写入 `performance/agentx-summary.json` 或 `profiling/agentx-summary.json`。双轮运行也在 `result.json` 的 `steps[].solve.observations` 保存逐轮结果。
 - `agent/trajectory.jsonl`、`session.jsonl` 和脱敏桥接日志。
-- `artifacts/artifacts.tar`：Harness 原始导出和日志，包含内部 `agentx-artifacts` 目录；失败时保留可收集的部分产物。
-- replay 另存 `agent/replay-coverage.json`，按 trace id、原始外层/内层索引核对请求覆盖率；同一证据也收入原始产物包。报告展示完成的 trace、采集请求、失败、取消、缺失和重复数量。
+- `performance/outputs/` 和 `profiling/outputs/` 各保存该轮的原始 Harness 导出和日志。失败或取消时仍收集已产生的文件，缺少的必需文件记录在 `files.json`。
+- `replay-coverage.json` 随各轮原始数据保存，按 trace ID 和原始内外层索引核对覆盖率。诊断预热的会话、轨迹和覆盖记录在 `profiling/outputs/warmup/`。
 
 报告分别展示 profiling 与 warmup；TTFT、ITL、请求延迟和 Interactivity 的分布来自官方导出，吞吐使用 Harness 的测量时间，各点的分位数不合并。缺失值显示未知，token usage 只统计预热和测量均有数据的字段，不代表服务商账单。
 
@@ -304,7 +304,8 @@ arsi-evaluator run playbook/agentx/agentx-service-profiling.yaml
 
 ```text
 tasks/<任务哈希>/attempts/<attempt-id>/
-├── performance/       # 正式轮的请求、Harness 导出、引擎指标和汇总
+├── performance/       # 正式轮摘要和收集状态
+│   └── outputs/       # 逐请求记录、Harness 导出和引擎采样
 ├── profiling/
 │   ├── outputs/       # 诊断轮自己的 Harness 导出和回放覆盖
 │   └── trace/         # 服务端 profiler 和已配置的硬件采样产物

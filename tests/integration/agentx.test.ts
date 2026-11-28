@@ -26,7 +26,6 @@ import { stringify } from "yaml";
 import { runCli } from "../../src/cli/main.js";
 import { AgentXReplaySolver, parseAgentXReplayConfig } from "../../src/plugins/solvers/agentx-replay.js";
 import { LocalEnvironment } from "../../src/plugins/environments/local/environment.js";
-import { validateTransferSpec } from "../../src/infrastructure/filesystem/workspace-transfer.js";
 import { normalizeTelemetry, type AgentXTelemetry } from "../../src/plugins/benchmarks/inference-engine/agentx/evidence/telemetry.js";
 import { serverMetricsEvidence, telemetryConfig } from "../fixtures/agentx/server-metrics.js";
 
@@ -67,13 +66,10 @@ test.each([60, 3600])("HF source locks exact bytes and passes the %s-second wind
   expect(await readFile(plan.tasks[0]?.solveEnv.initialFiles[0]?.source ?? "", "utf8")).toBe(bytes);
   const dockerPlan = await new AgentXBenchmark(benchmark.config, "docker").planRun(refs, lock, signal());
   expect(dockerPlan.tasks[0]?.solveEnv.network).toBe("host");
-  for (const task of dockerPlan.tasks) {
-    const collection = task.artifactCollection;
-    if (!collection) throw new Error("AgentX must collect Harness artifacts");
-    expect(() => validateTransferSpec(collection, "/workspace")).not.toThrow();
-    expect(collection).toEqual({ kind: "artifacts", workdir: "/workspace", paths: ["/workspace/agentx-artifacts"] });
+  for (const task of [...plan.tasks, ...dockerPlan.tasks]) {
+    expect(task.artifactDirectory).toEqual({ name: "performance", requiredFiles: ["harness.log"] });
+    expect(task.artifactCollection).toBeUndefined();
   }
-  expect(plan.tasks[0]?.artifactCollection).toEqual({ kind: "artifacts", workdir: ".", paths: ["agentx-artifacts"] });
   const task = plan.tasks[0]; if (!task) throw new Error("task fixture");
   const summary = normalizeAgentXExport(profileExport(), { ...workload, durationSeconds, sha256: digest }, lexicon);
   expect(await benchmark.verify(task, { finalText: "", usage: { inputTokens: null, outputTokens: null, totalTokens: null }, observations: summary }, null, signal())).toMatchObject({ passed: null });
@@ -292,7 +288,7 @@ test("remote tokenizer resume uses the original commit after main has advanced",
 test.each([
   { name: "process failure", code: 1, terminal: { schemaVersion: 1, type: "error" } },
   { name: "missing export", code: 0, terminal: { schemaVersion: 1, type: "result" } },
-])("$name rejects the measurement, redacts diagnostics and keeps partial artifacts", async ({ code, terminal }) => {
+])("$name rejects the measurement and redacts diagnostics", async ({ code, terminal }) => {
   const path = resolve(await root()), directory = join(path, "tokenizer");
   await mkdir(directory); await writeFile(join(directory, "tokenizer.json"), "controlled-tokenizer");
   const paths = { root: path, agent: join(path, "agent"), verifier: join(path, "verifier"), artifacts: join(path, "artifacts") };
@@ -301,8 +297,6 @@ test.each([
   const stop = vi.fn(async () => {});
   async function* stream(text: string) { yield Buffer.from(text); }
   session.start = async () => {
-    await mkdir(join(session.workdir, "agentx-artifacts"));
-    await writeFile(join(session.workdir, "agentx-artifacts", "harness.log"), "controlled partial evidence");
     return { stdout: stream(JSON.stringify(terminal)), stderr: stream("error for fixture-secret"),
       done: Promise.resolve({ code, signal: null }), stop };
   };
@@ -315,12 +309,33 @@ test.each([
   await expect(solver.solve({ id: "point", prompt: "", payload: workload }, session,
     { key: { runId: "run", taskId: "point", attemptId: "attempt" }, paths, signal: signal() })).rejects.toThrow();
   expect(stop).toHaveBeenCalledWith(500);
-  const diagnostic = await readFile(join(paths.agent, "bridge-stderr.log"), "utf8");
+  const diagnostic = await readFile(join(paths.root, "performance", "bridge-stderr.log"), "utf8");
   expect(diagnostic).not.toContain(auth.value);
   expect(diagnostic).toContain("[redacted]");
-  await expect(readFile(join(paths.agent, "agentx-summary.json"))).rejects.toThrow();
-  const target = join(paths.artifacts, "partial.tar");
-  await session.exportState({ kind: "artifacts", workdir: ".", paths: ["agentx-artifacts"] }, target, signal());
-  await session.dispose(signal());
-  expect((await readFile(target)).length).toBeGreaterThan(0);
+  await expect(readFile(join(paths.root, "performance", "agentx-summary.json"))).rejects.toThrow();
+});
+
+test("a failed measurement publishes the surviving raw files and inventories missing evidence", async () => {
+  const path = resolve(await root()), value = harness(path);
+  cleanup.push(() => value.dispose());
+  value.components.environment = new LocalEnvironment(path);
+  value.components.solver.requirements = () => [];
+  value.config.experiment.run.taskIds = ["a"];
+  const prepare = value.components.benchmark.prepare.bind(value.components.benchmark);
+  value.components.benchmark.prepare = async (...args) => ({ ...await prepare(...args),
+    artifactDirectory: { name: "performance", requiredFiles: ["harness.log", "replay-coverage.json"] } });
+  value.components.solver.solve = async (_task, session) => {
+    await mkdir(join(session.workdir, "performance"));
+    await writeFile(join(session.workdir, "performance", "harness.log"), "partial replay");
+    throw new Error("controlled harness failure");
+  };
+  const snapshot = await runEngine({ ...value, signal: signal() });
+  const record = snapshot.records[0];
+  expect(record, JSON.stringify(record?.errors)).toMatchObject({ executionStatus: "failed", collection: { artifacts: "partial" } });
+  if (!record) throw new Error("Missing attempt");
+  const attempt = join(value.config.experiment.output.directory, snapshot.run.runId, "tasks", safeTaskKey("a"), "attempts", record.key.attemptId);
+  const manifest = JSON.parse(await readFile(join(attempt, "files.json"), "utf8"));
+  expect(manifest.missing).toContainEqual(expect.objectContaining({ path: "performance/outputs/replay-coverage.json" }));
+  expect(await readFile(join(attempt, "performance/outputs/harness.log"), "utf8")).toBe("partial replay");
+  expect(JSON.stringify(manifest)).not.toContain("artifacts.tar");
 });

@@ -124,6 +124,7 @@ export async function runTask(
   let stepErrorStart = 0;
   let stepArchived = false;
   let solveStarted = false;
+  const artifactDirectories: NonNullable<PreparedTask["artifactDirectory"]>[] = [];
   const failure: RecordAttemptFailure = (at, error, fallback, context = "", cancellation) => {
     let item: Failure;
     if (at === "prepare" && preparation.state === "failed") {
@@ -214,6 +215,8 @@ export async function runTask(
       const names = prepared.steps.map(step => step.name);
       if (!names.length || new Set(names).size !== names.length || names.some(name => !/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/u.test(name)) ||
         prepared.steps.some(step => step.task.steps || step.task.input.id !== job.taskId)) throw new TypeError("Invalid prepared steps");
+      const directories = prepared.steps.flatMap(({ task }) => task.artifactDirectory ? [task.artifactDirectory.name] : []);
+      if (new Set(directories).size !== directories.length) throw new TypeError("Steps must own distinct artifact directories");
       multiTask = prepared;
       record.steps = [];
     }
@@ -275,6 +278,7 @@ export async function runTask(
           });
         }
       }
+      if (step.task.artifactDirectory) artifactDirectories.push(step.task.artifactDirectory);
       try { await runAttemptStep(step, stepContext, multiTask !== undefined); }
       finally { solveStarted ||= step.solveStarted; }
       if (multiTask && activeStep) {
@@ -330,12 +334,15 @@ export async function runTask(
   const required = solveStarted ? [TRAJECTORY_EVIDENCE_PATH, "agent/session.jsonl"] : [];
   const artifactName = step ? expectedStepArtifact(step) : null;
   if (resources.hasSolveEnvironment && artifactName !== null) required.push(`artifacts/${artifactName}`);
+  for (const spec of artifactDirectories)
+    required.push(...spec.requiredFiles.map(file => [spec.name, "outputs", file].join("/")));
   const collectionStart = performance.now();
   progress("collect", "Collecting trajectory and artifacts");
   const files = await buildFileManifest(paths.root, required);
   record.collection.trajectory = await trajectoryState(paths.root, files, key, solveStarted);
-  const artifactFiles = files.files.filter(file => file.path.startsWith("artifacts/") || file.path.startsWith("logs/artifacts/"));
-  const missingArtifacts = files.missing.some(file => file.path.startsWith("artifacts/"));
+  const isDirectoryArtifact = (path: string) => artifactDirectories.some(spec => path.startsWith(spec.name + "/outputs/"));
+  const artifactFiles = files.files.filter(file => file.path.startsWith("artifacts/") || file.path.startsWith("logs/artifacts/") || isDirectoryArtifact(file.path));
+  const missingArtifacts = files.missing.some(file => file.path.startsWith("artifacts/") || isDirectoryArtifact(file.path));
   record.collection.artifacts = missingArtifacts
     ? artifactFiles.length
       ? "partial"

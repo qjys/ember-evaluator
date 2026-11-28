@@ -56,6 +56,8 @@ export type PreparedTask = {
   transfer: TransferSpec | null;
   /** Snapshot declared deliverables without restoring into another environment. */
   artifactCollection?: Extract<TransferSpec, { kind: "artifacts" }>;
+  /** Publish a same-named workspace directory to <name>/outputs in the attempt, with individually inventoried files. */
+  artifactDirectory?: { name: string; requiredFiles: string[] };
   /** Omitted preserves non-Harbor benchmarks' existing verification contract. */
   verificationMode?: "none" | "shared" | "separate";
   verificationNetwork?: NonNullable<EnvironmentSpec["network"]>;

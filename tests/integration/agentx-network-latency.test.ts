@@ -58,7 +58,7 @@ test.each(["automatic", "manual"])("YAML %s calibration reaches saved local and 
       { key: { runId: "run", taskId: "point", attemptId: "attempt" }, paths, signal: signal() });
     const observations = expectRecord(result.observations, "observations");
     expect(observations.networkLatency).toMatchObject({ config: networkLatency, status: mode === "automatic" ? "partial" : "complete", rttMs: 4 });
-    expect(JSON.parse(await readFile(join(paths.agent, "agentx-summary.json"), "utf8"))).toEqual(observations);
+    expect(JSON.parse(await readFile(join(paths.root, "performance", "agentx-summary.json"), "utf8"))).toEqual(observations);
     expect(JSON.stringify(observations)).not.toContain("controlled-secret");
   }
 });

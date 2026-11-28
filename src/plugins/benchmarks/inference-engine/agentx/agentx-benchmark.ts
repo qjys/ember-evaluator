@@ -172,11 +172,10 @@ export class AgentXBenchmark implements Benchmark {
       runtime: [], ...(this.environmentName === "docker" ? { network: "host", build: { context: agentXAssets,
         dockerfile: "Dockerfile", sourceHash: await agentXBridgeDigest(signal) } } : {}) };
     const taskFor = (payload: AgentXWorkload): PreparedTask => {
-      const workdir = this.environmentName === "docker" ? "/workspace" : ".";
-      const directory = payload.collection ? "agentx-" + payload.collection.type : "agentx-artifacts";
       return { input: { id: ref.id, prompt: `AgentX ${payload.variant} ${payload.mode}: ${concurrency} concurrent session trees`, payload },
         verification: payload, solveEnv, verifyEnv: null, transfer: null, verificationMode: "none",
-        artifactCollection: { kind: "artifacts", workdir, paths: [workdir === "." ? directory : workdir + "/" + directory] } };
+        artifactDirectory: { name: payload.collection?.type ?? "performance",
+          requiredFiles: ["harness.log", ...(payload.mode === "replay" ? ["replay-coverage.json"] : [])] } };
     };
     const performance = taskFor(formal);
     if (!this.config.profiling) return performance;

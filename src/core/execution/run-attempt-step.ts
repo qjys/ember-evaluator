@@ -1,4 +1,7 @@
+import { lstat } from "node:fs/promises";
 import { join } from "node:path";
+import { checkedPath } from "../artifacts/artifacts.js";
+import { publishArtifactDirectory, validateArtifactDirectory } from "../artifacts/directory-collection.js";
 import { readCollectOutput } from "../artifacts/collect-output.js";
 import type { Benchmark } from "../contracts/benchmark.js";
 import type { AttemptPaths, AttemptRecord, Phase } from "../contracts/result.js";
@@ -26,6 +29,10 @@ function artifactName(spec: NonNullable<PreparedTask["transfer"]>): string {
 export type AttemptStep = ReturnType<typeof createAttemptStep>;
 
 export function createAttemptStep(task: PreparedTask) {
+  if (task.artifactDirectory) {
+    validateArtifactDirectory(task.artifactDirectory);
+    if (task.transfer || task.artifactCollection) throw new TypeError("Use one artifact collection format per step");
+  }
   return { task, solveStarted: false, exported: false, transitioned: false, collected: false };
 }
 
@@ -61,6 +68,15 @@ async function exportStep(
     (record.warnings ??= []).push({ phase, code: warning.code, message: redactDiagnostic(warning.message, secrets) });
   }
   return artifact;
+}
+
+async function collectDirectory(step: AttemptStep, context: StepContext, spec: NonNullable<PreparedTask["artifactDirectory"]>, signal: AbortSignal): Promise<void> {
+  await publishArtifactDirectory(context.resources.solveEnvironment, context.paths.root, spec, signal);
+  step.exported = true;
+  for (const file of spec.requiredFiles) {
+    const path = await checkedPath(context.paths.root, [spec.name, "outputs", file].join("/"));
+    if (!(await lstat(path)).isFile()) throw new TypeError("Missing required artifact file: " + file);
+  }
 }
 
 async function finishSolve(step: AttemptStep, context: StepContext, signal: AbortSignal): Promise<void> {
@@ -133,6 +149,8 @@ export async function runAttemptStep(
   if (!shared && (resources.canQuiesceSolve || dependenciesReady)) await stage("transfer", signal => resources.quiesceSolve(signal));
   let verifier = shared ? resources.shareSolveWithVerification() : null;
   const snapshot = task.artifactCollection;
+  const directory = task.artifactDirectory;
+  if (directory) await stage("collect", signal => collectDirectory(step, context, directory, signal));
   if (snapshot) await stage("collect", signal => exportStep(step, context, snapshot, "collect", signal));
   const transfer = task.transfer;
   const transferred = transfer ? await stage("transfer", signal => exportStep(step, context, transfer, "transfer", signal)) : null;
@@ -168,7 +186,8 @@ export async function recoverStepEvidence(step: AttemptStep, context: StepContex
   const { task } = step;
   const { resources, stage, failure } = context;
   const evidenceSpec = task.transfer ?? task.artifactCollection;
-  if (!resources.hasSolveEnvironment || step.exported || (!evidenceSpec && !task.collect?.length)) return;
+  const directory = step.solveStarted ? task.artifactDirectory : undefined;
+  if (!resources.hasSolveEnvironment || step.exported || (!evidenceSpec && !directory && !task.collect?.length)) return;
   try {
     await stage("collect", async signal => {
       // Stop any cancelled writer before invoking hooks or taking a snapshot.
@@ -180,12 +199,13 @@ export async function recoverStepEvidence(step: AttemptStep, context: StepContex
           if (resources.acceptingResources) failure("collect", error, "ARTIFACT_COLLECTION_INCOMPLETE", "Before evidence collection: ");
         }
       }
-      if (!evidenceSpec) return;
+      if (!evidenceSpec && !directory) return;
       // A failed hook must not discard files already written to the workspace.
       signal.throwIfAborted();
       await resources.quiesceSolve(signal);
       signal.throwIfAborted();
-      await exportStep(step, context, evidenceSpec, "collect", signal);
+      if (evidenceSpec) await exportStep(step, context, evidenceSpec, "collect", signal);
+      else if (directory) await collectDirectory(step, context, directory, signal);
     }, cleanupSignal);
   } catch (error) {
     failure("collect", error, "ARTIFACT_COLLECTION_INCOMPLETE");

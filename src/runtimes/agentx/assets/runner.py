@@ -77,7 +77,8 @@ def run_measurement(request, telemetry, metrics_url, counters):
             stream.write(redact(json.dumps(record)) + "\n")
 
     event("start", {"harnessVersion": "1.0.7", "workload": workload})
-    (output / "session.jsonl").write_text(json.dumps({"kind": "agentx", "key": request["key"]}) + "\n", encoding="utf-8")
+    (output / "session.jsonl").write_text(json.dumps({"kind": "agentx", "key": request["key"],
+        "phase": "warmup" if request.get("warmup") else workload.get("collection", {}).get("type", "performance")}) + "\n", encoding="utf-8")
     args = [sys.executable, str(Path(__file__).resolve()), "--harness", "profile",
             "--scenario", "agentx", "--url", request["url"], "--endpoint", request["endpoint"],
             "--model", request["model"], "--tokenizer", request["tokenizerPath"],
@@ -182,8 +183,8 @@ def run_measurement(request, telemetry, metrics_url, counters):
             from replay_coverage import audit_replay
             coverage, traces = audit_replay(expected, list(artifacts.rglob("profile_export.jsonl")))
             evidence = json.dumps({**coverage, "traces": traces}, indent=2) + "\n"
-            (artifacts / "replay-coverage.json").write_text(evidence, encoding="utf-8")
-            (output / "replay-coverage.json").write_text(evidence, encoding="utf-8")
+            coverage_dir = output if request.get("warmup") else artifacts
+            (coverage_dir / "replay-coverage.json").write_text(evidence, encoding="utf-8")
         if code != 0:
             raise RuntimeError("AgentX Harness exited with code %s; see agentx/harness.log" % code)
         if coverage is not None and not coverage["complete"]:

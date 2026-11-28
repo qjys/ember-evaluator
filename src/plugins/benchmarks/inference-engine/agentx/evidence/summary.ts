@@ -267,7 +267,7 @@ export function parseAgentXSummary(value: unknown): AgentXSummary {
     throw new TypeError("Invalid AgentX summary");
   const workload = parseWorkload(raw.workload);
   const directory = raw.artifactDirectory;
-  if (directory !== undefined && (directory !== workload.collection?.type || (directory !== "performance" && directory !== "profiling")))
+  if (directory !== undefined && (directory !== (workload.collection?.type ?? "performance") || (directory !== "performance" && directory !== "profiling")))
     throw new TypeError("Invalid AgentX artifact directory");
   const lexicon = expectRecord(raw.lexicon, "AgentX lexicon");
   for (const key of ["source", "revision", "digest"]) expectNonEmptyString(lexicon[key], `AgentX lexicon.${key}`);
