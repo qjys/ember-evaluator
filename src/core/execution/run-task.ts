@@ -286,9 +286,9 @@ export async function runTask(
         await stage("cleanup", active => resources.finishStep(active));
         await stage("collect", () => archiveStep(paths.root, record, activeStep!));
         stepArchived = true;
-        const decision = components.benchmark.evaluateSteps!(multiTask, record.steps!);
-        record.verdict = decision.verdict;
         activeStep = undefined;
+        const decision = await stage("verify", async () => components.benchmark.evaluateSteps!(multiTask!, record.steps!));
+        record.verdict = decision.verdict;
         if (!decision.continue) break;
       }
     }

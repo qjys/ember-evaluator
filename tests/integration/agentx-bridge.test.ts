@@ -129,12 +129,13 @@ test.skipIf(!python).each([false, true])("real AgentX loads the locked corpus an
   }
 }, 130000);
 
-test.skipIf(!python).each(["standard", "service-collections"])("Evaluator runs the %s YAML through the real Harness and rebuilds its report", async scenario => {
-  const dual = scenario === "service-collections";
+test.skipIf(!python).each(["standard", "service-collections", "profile-failure"])("Evaluator runs the %s YAML through the real Harness and rebuilds its report", async scenario => {
+  const dual = scenario !== "standard";
+  const rejected = scenario === "profile-failure";
   await mkdir(".scratch", { recursive: true });
   const root = await mkdtemp(resolve(".scratch/agentx-e2e-"));
   const helper = await startLocalProcess({ executable: python ?? "python", args: [resolve("tests/fixtures/agentx/check-bridge.py"),
-    root, resolve("src/runtimes/agentx/assets/runner.py"), "--serve", ...(dual ? ["--service-collections"] : ["--standard-duration", "--service-engine"])], cwd: resolve("."),
+    root, resolve("src/runtimes/agentx/assets/runner.py"), "--serve", ...(dual ? ["--service-collections", ...(rejected ? ["--reject-profile"] : [])] : ["--standard-duration", "--service-engine"])], cwd: resolve("."),
     env: { PYTHONDONTWRITEBYTECODE: "1", PYTHONUNBUFFERED: "1", PYTHONIOENCODING: "utf-8", PYTHONUTF8: "1" }, input: null }, AbortSignal.timeout(dual ? 360000 : 120000));
   const diagnostics = (async () => { for await (const _chunk of helper.stderr) { /* Drain tokenizer diagnostics. */ } })();
   let components: Awaited<ReturnType<typeof bootstrap>> | undefined;
@@ -155,9 +156,9 @@ test.skipIf(!python).each(["standard", "service-collections"])("Evaluator runs t
     const configPath = join(root, "experiment.yaml");
     await writeFile(configPath, stringify({ services: { default: { model: "fixture-model", base_url: ready.url, api_key: "${AGENTX_FIXTURE_KEY}" } },
       benchmark: { name: "agentx", scenario: dual ? "replay" : "standard", config: { cacheDir: join(root, "cache"), ...(dual
-        ? { traceCount: 8, concurrency: [1, 8], engineMetrics: ["fixture_requests_total"], profiling: { traceDirectory: join(root, "traces"), exportTimeoutSeconds: 5 } }
+        ? { measurementMode: "all", traceCount: 8, concurrency: rejected ? [1] : [1, 8], engineMetrics: ["fixture_requests_total"], profiling: { provider: "vllm", preset: "timeline", traceDirectory: join(root, "traces"), exportTimeoutSeconds: 5 } }
         : { durationSeconds: 60, engineMetrics: ["fixture_requests_total"] }) },
-        solver: { config: { tokenizer: ready.tokenizer, pythonExecutable: python, cacheDir: join(root, "cache"), requestTimeoutSeconds: 10,
+        solver: { config: { tokenizer: ready.tokenizer, pythonExecutable: python, cacheDir: join(root, "cache"), requestTimeoutSeconds: dual ? 30 : 10,
           ...(dual ? {} : { networkLatency: { mode: "automatic", pingIntervalSeconds: 0.2 } }) } } },
       environment: "local", output: { directory: join(root, "runs") } }));
     const config = await loadConfig(configPath, {}, { ...process.env, AGENTX_FIXTURE_KEY: ready.key });
@@ -169,39 +170,56 @@ test.skipIf(!python).each(["standard", "service-collections"])("Evaluator runs t
     await symlink(dirname(dirname(resolve(python ?? "python"))), join(runtime, "venv"), process.platform === "win32" ? "junction" : "dir");
     components.solver.runtimeInstallation = async () => ({ id: "agentx-controlled-runtime", files: [], commands: [], probes: [], localRoot: runtime });
     const snapshot = await runEngine({ components, config, signal: AbortSignal.timeout(dual ? 315000 : 90000) });
-    expect(snapshot.run.status, JSON.stringify(snapshot.records[0]?.errors)).toBe("completed");
+    if (!rejected) expect(snapshot.run.status, JSON.stringify(snapshot.records.flatMap(record => record.errors))).toBe("completed");
     if (dual) {
-      expect(snapshot.records.map(r => r.key.taskId)).toEqual(["agentx-256k-replay-c1", "agentx-256k-replay-c8",
-        "agentx-256k-replay-c1-profiling", "agentx-256k-replay-c8-profiling"]);
+      const concurrencies = rejected ? [1] : [1, 8];
+      expect(snapshot.run.taskIds).toEqual(concurrencies.map(c => "agentx-256k-replay-c" + c));
+      expect(snapshot.records).toHaveLength(concurrencies.length);
       for (const record of snapshot.records) {
-        expect(record.errors).toEqual([]);
-        expect(record.collection).toMatchObject({ artifacts: "complete", trajectory: "complete" });
-        const summary = parseAgentXSummary(record.solve?.observations);
         const directory = join(config.experiment.output.directory, snapshot.run.runId, "tasks", safeTaskKey(record.key.taskId),
-          "attempts", record.key.attemptId, "artifacts", "agentx");
-        expect(await readFile(join(directory, "collections.json"), "utf8")).not.toContain(ready.key);
-        const point = "point-" + summary.workload.concurrency;
-        if (summary.workload.collection?.type === "profiling") {
-          expect(record.solve?.usage.totalTokens).toBeNull();
-          expect(summary.deviceProfile?.status).toBe("measured");
-          expect(await readFile(join(directory, "profiling", point, "trace", "rank0", "ASCEND_PROFILER_OUTPUT", "op_statistic.csv"), "utf8")).toContain("MatMul");
+          "attempts", record.key.attemptId);
+        expect(record.steps?.map(step => step.name)).toEqual(["performance", "profiling"]);
+        const [performance, profiling] = record.steps ?? [];
+        const formal = parseAgentXSummary(performance?.solve?.observations);
+        expect(formal.replayCoverage?.successfulRequests).toBe(56);
+        expect(formal.profiling.requests?.mean).toBe(56);
+        expect(formal.engine).toBeDefined();
+        expect(record.solve?.usage).toEqual(performance?.solve?.usage);
+        expect((await stat(join(directory, "performance", "replay-coverage.json"))).size).toBeGreaterThan(0);
+        const meta = await readFile(join(directory, "profiling", "collections.json"), "utf8");
+        expect(meta).not.toContain(ready.key);
+        if (rejected) {
+          expect(record.executionStatus).toBe("failed");
+          expect(profiling?.errors[0]?.message).toContain("HTTP 409");
+          expect(meta).toContain("failed");
         } else {
-          expect(summary.profiling.requests?.mean).toBe(56);
-          expect(summary.engine).toMatchObject({ status: "measured", series: [{ series: "fixture_requests_total", delta: 56 }] });
-          expect((await stat(join(directory, "outputs", point, "replay-coverage.json"))).size).toBeGreaterThan(0);
+          expect(record.errors).toEqual([]);
+          expect(record.collection).toMatchObject({ artifacts: "complete", trajectory: "complete" });
+          const diagnostic = parseAgentXSummary(profiling?.solve?.observations);
+          expect(profiling?.solve?.usage.totalTokens).toBeNull();
+          expect(diagnostic.replayCoverage?.successfulRequests).toBe(7 * formal.workload.concurrency);
+          expect(diagnostic.deviceProfile?.status).toBe("measured");
+          expect(await readFile(join(directory, "profiling", "trace", formal.workload.concurrency === 1 ? "capture-63" : "capture-133", "rank0", "ASCEND_PROFILER_OUTPUT", "op_statistic.csv"), "utf8")).toContain("MatMul");
+          expect((await stat(join(directory, "profiling", "outputs", "replay-coverage.json"))).size).toBeGreaterThan(0);
         }
       }
-      expect(await (await fetch(ready.url + "/events")).json()).toEqual([
-        ["metrics", 0], ["metrics", 56], ["metrics", 56], ["metrics", 112],
-        ["/start_profile", 112], ["/stop_profile", 119], ["/start_profile", 119], ["/stop_profile", 175]]);
+      const events: unknown = await (await fetch(ready.url + "/events")).json();
+      if (!Array.isArray(events)) throw new Error("Missing service events");
+      expect(events.filter(event => Array.isArray(event) && event[0] !== "metrics")).toEqual(rejected ? [["/start_profile", 63]] : [
+        ["/start_profile", 63], ["/stop_profile", 70], ["/start_profile", 133], ["/stop_profile", 189]]);
       await saveReport(components.store, components.metrics, components.reporter);
       const runDirectory = join(config.experiment.output.directory, snapshot.run.runId);
       const report = await readFile(join(runDirectory, "report.md"), "utf8");
       expect(report).toContain("fixture\\_requests\\_total");
-      expect(report.match(/Ascend profiling · measured/gu)).toHaveLength(2);
+      expect(report).toContain("正式压测 · measured");
+      if (rejected) expect(report).toContain("HTTP 409");
+      else expect(report.match(/Ascend profiling · measured/gu)).toHaveLength(2);
+      const metricsPath = join(runDirectory, "metrics.json");
+      const metrics = await readFile(metricsPath, "utf8");
       await components.store.close();
       await rebuildReport(runDirectory);
       expect(await readFile(join(runDirectory, "report.md"), "utf8")).toBe(report);
+      expect(await readFile(metricsPath, "utf8")).toBe(metrics);
       passed = true;
       return;
     }

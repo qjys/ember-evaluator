@@ -377,6 +377,15 @@ class LocalSession implements EnvironmentSession {
     this.metadata.phase = "verify";
   }
 
+  async transitionToSolve(network: EnvironmentSpec["network"], signal: AbortSignal, users?: EnvironmentSpec["executionUsers"]): Promise<void> {
+    this.active();
+    // Only resume consecutive public solve steps. Local cannot isolate a previous private verification workspace.
+    if (this.metadata.phase !== "solve" || users || (network !== undefined && network !== "bridge" && network !== "host"))
+      throw new LocalEnvironmentError("ENV_CAPABILITY_UNSUPPORTED", "Local environment can only resume public solve steps on the host network");
+    await this.quiesce(signal);
+    this.quiesced = false;
+  }
+
   dispose(_signal: AbortSignal): Promise<void> {
     if (this.disposal) return this.disposal;
     this.disposed = true;

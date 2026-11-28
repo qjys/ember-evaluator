@@ -1,3 +1,4 @@
+import { classifyError } from "../../src/core/errors/classify.js";
 import { expect, test } from "vitest";
 import { normalizeAgentXExport, parseAgentXSummary, parseWorkload, agentXUsage } from "../../src/plugins/benchmarks/inference-engine/agentx/evidence/summary.js";
 import { parseAgentXConfig, AgentXBenchmark } from "../../src/plugins/benchmarks/inference-engine/agentx/agentx-benchmark.js";
@@ -199,31 +200,40 @@ test("concurrency points retain their own percentiles in metrics and reports", a
   expect(markdown).not.toContain('"measurement"');
 });
 
-test("service collections retain formal point order and require persisted successful baselines", async () => {
-  const config = parseAgentXConfig({ concurrency: [1, 8], engineMetrics: ["fixture_total"], profiling: { traceDirectory: "/shared/traces" } });
-  const benchmark = new AgentXBenchmark(config, "local");
+test("offline reports keep the artifact paths and task pairing of split-attempt runs", async () => {
   const value = snapshot();
-  if (!value.run.source) throw new Error("Fixture source missing");
-  const refs = [];
-  for await (const ref of benchmark.enumerate(value.run.source, new AbortController().signal)) refs.push(ref);
-  expect(refs.map(r => r.id)).toEqual(["agentx-256k-standard-c1", "agentx-256k-standard-c8", "agentx-256k-standard-c1-profiling", "agentx-256k-standard-c8-profiling"]);
-  const [first, second, diag, next] = refs;
-  const record = value.records[0];
-  if (!first || !second || !diag || !next || !record?.solve) throw new Error("Invalid fixture");
-  record.key.taskId = first.id;
-  record.collection = { artifacts: "complete", trajectory: "complete" };
-  value.run.taskIds = refs.map(r => r.id);
-  await expect(benchmark.validatePrerequisites(diag, async () => value)).rejects.toThrow(/concurrency 8/u);
-  const other = structuredClone(record);
-  other.key.taskId = second.id;
-  value.records.push(other);
-  await expect(benchmark.validatePrerequisites(diag, async () => value)).resolves.toBeUndefined();
-  await expect(benchmark.validatePrerequisites(next, async () => value)).rejects.toThrow(/preceding diagnostic/u);
-  record.solve.observations = normalizeAgentXExport({ ...profileExport(), error_request_count: { unit: "requests", avg: 1 } }, workload, lexicon);
-  await expect(benchmark.validatePrerequisites(diag, async () => value)).rejects.toThrow(/failed requests/u);
+  const formal = value.records[0];
+  if (!formal?.solve) throw new Error("Fixture has no solve");
+  formal.key.taskId = "agentx-256k-standard-c1";
+  formal.solve.observations = normalizeAgentXExport(profileExport(), { ...workload, collection: { type: "performance" } }, lexicon);
+  const profiling = structuredClone(formal);
+  profiling.key = { ...formal.key, taskId: formal.key.taskId + "-profiling", attemptId: "diagnostic" };
+  if (!profiling.solve) throw new Error("Missing solve");
+  profiling.solve.observations = { ...normalizeAgentXExport(profileExport(), { ...workload, collection: { type: "profiling",
+    profiling: { traceDirectory: "/shared", exportTimeoutSeconds: 5 } } }, lexicon),
+    deviceProfile: { status: "measured", traceDirectory: "/shared", exports: [{ deviceEvidence: true }] } };
+  value.records.push(profiling);
+  value.run.taskIds = value.records.map(r => r.key.taskId);
   const metrics = await new AgentXPerformanceMetrics().compute(value);
-  expect(metrics).toMatchObject({ points: [{ status: "partial", collections: [{ performanceStatus: "partial", profiling: { status: "pending" } }] },
-    { status: "partial", collections: [{ performanceStatus: "measured", profiling: { status: "pending" } }] }] });
+  expect(metrics).toMatchObject({ points: [{ status: "measured", collections: [{
+    performanceDirectory: expect.stringContaining("/attempt-1/artifacts/agentx/outputs/point-1"),
+    profiling: { status: "measured", artifactDirectory: expect.stringContaining("/diagnostic/artifacts/agentx/profiling/point-1") }
+  }] }] });
+});
+
+test("a later point is held if the service profiler could still be running", async () => {
+  const bench = new AgentXBenchmark(parseAgentXConfig({ concurrency: [1, 8], measurementMode: "all", profiling: { traceDirectory: "/shared" } }), "local");
+  const value = snapshot();
+  const formal = value.records[0];
+  if (!formal) throw new Error("Missing fixture");
+  const next = { id: "agentx-256k-standard-c8", recordKey: { concurrency: 8 } };
+  formal.steps = [{ name: "profiling", evidencePath: "steps/profiling", errors: [], solve: null, verdict: null,
+    startedAt: formal.startedAt, finishedAt: formal.finishedAt }];
+  formal.executionStatus = "failed";
+  formal.errors = [classifyError(new Error("AgentX stop_profile unconfirmed"), { phase: "solve" })];
+  await expect(bench.validatePrerequisites(next, async () => value)).rejects.toThrow(/cleanup unconfirmed/u);
+  formal.errors = [classifyError(new Error("No rank exports"), { phase: "solve" })];
+  await expect(bench.validatePrerequisites(next, async () => value)).resolves.toBeUndefined();
   expect(() => parseAgentXConfig({ concurrency: [1, 8], profiling: { traceDirectory: "/shared", traceCount: 4 } })).toThrow(/cover every concurrency/u);
   expect(() => parseAgentXReplayConfig({ telemetry: { msprof: {} } })).toThrow(/benchmark.config.profiling/u);
 });
@@ -242,7 +252,7 @@ test("legacy msprof summaries remain available to offline reports", async () => 
 test.each([
   ["performance", ["c1", "c8"]],
   ["profiling", ["c1-profiling", "c8-profiling"]],
-  ["all", ["c1", "c8", "c1-profiling", "c8-profiling"]],
+  ["all", ["c1", "c8"]],
 ] as const)("one YAML selector schedules %s and preserves diagnostic-only report points", async (mode, suffixes) => {
   const config = parseAgentXConfig({ measurementMode: mode, concurrency: [1, 8], profiling: { traceDirectory: "/shared" } });
   const bench = new AgentXBenchmark(config, "local");

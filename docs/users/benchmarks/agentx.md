@@ -124,7 +124,7 @@ networkLatency: # Under benchmark.solver.config
 
 `meanMs` must be finite/nonnegative. Manual mode performs no TCP probes and disallows `pingIntervalSeconds`; automatic disallows meanMs. Unknown or mixed-mode fields fail before execution.
 
-Results appear in `result.json` `solve.observations.networkLatency`, `agent/agentx-summary.json`, and metrics.json. Reports show mode, deducted mean RTT, total/success/failed probes, and raw/adjusted TTFT, TTFO, request latency (mean/P50/P95/P99). Adjusted distributions come directly from official `network_adjusted_*` exports, without recomputation. ITL/throughput/existing comparisons retain raw metrics.
+For runs without service collections, results appear in `result.json` `solve.observations.networkLatency`, `agent/agentx-summary.json`, and metrics.json. Reports show mode, deducted mean RTT, total/success/failed probes, and raw/adjusted TTFT, TTFO, request latency (mean/P50/P95/P99). Adjusted distributions come directly from official `network_adjusted_*` exports, without recomputation. ITL/throughput/existing comparisons retain raw metrics.
 
 `complete` means usable RTT and adjusted metrics. Failed/missing probes or missing adjusted metrics yield `partial` with data/warnings retained; no usable RTT/adjusted values yields unavailable. Missing values show `—`, never0. Calibration absence does not replace request success/failure. Pinned harness manual `meanMs: 0` may export no adjusted metrics; report `unavailable` while retaining raw values.
 
@@ -136,7 +136,7 @@ Mean TCP RTT estimates network round trips only, not every proxy/transport/clien
 
 Each concurrency point has a separate attempt saving:
 
-- `agent/agentx-summary.json`: versioned summary also in solve.observations.
+- Runs without service collections write `agent/agentx-summary.json`. Service collections write their summaries to `performance/agentx-summary.json` or `profiling/agentx-summary.json`. Dual-pass results also store each summary in `steps[].solve.observations`.
 - `agent/trajectory.jsonl`, `session.jsonl`, and redacted bridge logs.
 - `artifacts/artifacts.tar`: raw harness exports/logs under `agentx-artifacts`, with collectable partial artifacts on failure.
 - replay also saves `agent/replay-coverage.json`, checking trace IDs/original outer-inner coordinates, also included in raw artifacts. Reports count completed traces, captured requests, failures, cancellations, missing/duplicate requests.
@@ -254,7 +254,7 @@ Set `benchmark.config.measurementMode` in the [tuning playbook](../../../playboo
 | --- | --- | --- |
 | `performance` | Run the formal load with the service profiler idle | Request and token throughput, TTFT, per-request TPOT, ITL, latency, KV cache and queue samples |
 | `profiling` | Warm up with one tree, then profile one bounded replay | Diagnostic evidence and paths to raw exports |
-| `all` | Complete every formal point, then profile each concurrency | One report pairs both passes. Successful formal results survive diagnostic failures. |
+| `all` | One task per concurrency. Run the formal pass and then the diagnostic pass within the same attempt. | One report pairs both passes. Successful formal results survive diagnostic failures. |
 
 ```bash
 arsi-evaluator run playbook/agentx/agentx-service-profiling.yaml
@@ -281,7 +281,7 @@ Full diagnostics use the same service profiler configuration as timeline. Enable
 | Is memory traffic limiting execution? | Read and write bandwidth per HBM channel from the rank database (bytes/s converted to decimal MB/s) or the msprof export, plus available L2 events. |
 | How much communication is exposed? | HCCL times, compute overlap and per-link transport, transferred size, duration and bandwidth by rank. |
 
-The attempt's `trace/` retains new API process traces and each rank's native exports, profiler databases, metadata and raw inputs for offline reanalysis. Each `evaluator-artifacts.json` lists paths and sizes relative to its rank. Inspect `ASCEND_PROFILER_OUTPUT/communication.json` for individual HCCL calls and `communication_matrix.json` for links. Storage grows with the number of ranks and profile duration. PMU windows include replay-client setup and drain.
+Each point's `profiling/trace/` retains new API process traces and each rank's native exports, profiler databases, metadata and raw inputs for offline reanalysis. Each `evaluator-artifacts.json` lists paths and sizes relative to its rank. Inspect `ASCEND_PROFILER_OUTPUT/communication.json` for individual HCCL calls and `communication_matrix.json` for links. Storage grows with the number of ranks and profile duration. PMU windows include replay-client setup and drain.
 
 Set the template's `devices: [0, 1]` to the physical devices used by the local service. For a remote inference endpoint, omit local devices and configure the shared trace directory and serving node's `nodeMetrics` exporter. Disk and network counters include the delta and the rate over their observed sample interval.
 
@@ -291,6 +291,17 @@ With a local loopback service endpoint, setting `profiling.devices: [1]` also re
 
 Use `profiling.nodeMetrics` to sample an exporter on the serving node. For example, set `endpoint: http://inference-node:9100/metrics` and `names: [node_cpu_seconds_total, node_memory_MemAvailable_bytes, node_network_receive_bytes_total]`. Select the actual names from a device exporter for NPU memory and utilization. The evidence retains labels, source URL and timestamps.
 
-Each run writes `report.md` and `metrics.json` for offline use. Per-attempt formal output is in `artifacts/agentx/outputs/point-<concurrency>/`; diagnostic exports and raw PMU tables are under `artifacts/agentx/profiling/point-<concurrency>/trace/`. The shared mount keeps original service traces. Use `profiling.service` for a dedicated diagnostic instance serving the same model.
+Each run writes `report.md` and `metrics.json` for offline use. With `concurrency: [1, 8]` and `measurementMode: all`, the order is c1 formal → c1 diagnostic → c8 formal → c8 diagnostic. Only the formal pass contributes to request latency and throughput. Follow the per-point artifact paths in the report.
+
+```text
+tasks/<task-hash>/attempts/<attempt-id>/
+├── performance/       # Formal requests, Harness exports, engine metrics and summary
+├── profiling/
+│   ├── outputs/       # Diagnostic Harness exports and replay coverage
+│   └── trace/         # Service profiler exports and configured hardware samples
+└── steps/             # Evaluator step records, logs and session trajectories
+```
+
+Single-pass modes produce the selected measurement directory. A failed diagnostic retains the verified formal results and its failure reason in the report. Retrying the task runs its selected passes in a new attempt. The per-task `run.timeoutSeconds` covers both passes and trace export. Historical split-task runs rebuild offline using their original paths. To finish an incomplete split-task run, resume with its original version or start a new run with this version. The shared mount keeps original service traces. Use `profiling.service` for a dedicated diagnostic instance serving the same model.
 
 [User guide](../README.md) · [Quick start](../quick-start.md)

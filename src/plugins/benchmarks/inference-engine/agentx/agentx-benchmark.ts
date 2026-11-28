@@ -6,8 +6,7 @@ import { expectNonEmptyString, expectPositiveInteger, expectRecord, rejectUnknow
 import type { EffectiveConfig } from "../../../../core/contracts/config.js";
 import type { Benchmark, BenchmarkRunPlan } from "../../../../core/contracts/benchmark.js";
 import type { PreparedTask, SourceLock, TaskRef } from "../../../../core/contracts/task.js";
-import type { ResultSnapshot, SolveResult, VerifyResult } from "../../../../core/contracts/result.js";
-import { isEvaluationComplete } from "../../../../core/results/evaluation-outcome.js";
+import type { AttemptStepResult, ResultSnapshot, SolveResult, VerifyResult } from "../../../../core/contracts/result.js";
 import { parseEngineMetrics, parseProfileConfig, type AgentXProfileConfig } from "./evidence/service-collections.js";
 import { fingerprintConfig } from "../../../../core/results/run-manifest.js";
 import { DatasetCache } from "../../../../infrastructure/datasets/cache.js";
@@ -119,32 +118,31 @@ export class AgentXBenchmark implements Benchmark {
   }
 
   async *enumerate(_source: SourceLock, signal: AbortSignal): AsyncIterable<TaskRef> {
-    if (this.config.measurementMode !== "profiling") for (const concurrency of this.config.concurrency) {
+    for (const concurrency of this.config.concurrency) {
       signal.throwIfAborted();
-      yield { id: this.id(concurrency), recordKey: { concurrency } };
-    }
-    if (this.config.profiling) for (const concurrency of this.config.concurrency) {
-      signal.throwIfAborted();
-      yield { id: this.id(concurrency) + "-profiling", recordKey: { concurrency } };
+      const id = this.id(concurrency) + (this.config.measurementMode === "profiling" ? "-profiling" : "");
+      yield { id, recordKey: { concurrency } };
     }
   }
 
   async validatePrerequisites(ref: TaskRef, snapshot: () => Promise<ResultSnapshot>): Promise<void> {
-    if (!this.config.profiling || !ref.id.endsWith("-profiling")) return;
+    if (!this.config.profiling) return;
     const { records } = await snapshot();
-    if (this.config.measurementMode !== "profiling") for (const concurrency of this.config.concurrency) {
-      const record = records.find(r => r.key.taskId === this.id(concurrency));
-      if (!record || !isEvaluationComplete(record) || record.collection.artifacts !== "complete" ||
-          record.collection.trajectory !== "complete") throw new Error(`Profiling skipped: incomplete performance at concurrency ${concurrency}`);
-      if (!successfulAgentXWindow(parseAgentXSummary(record.solve?.observations)))
-        throw new Error(`Profiling skipped: missing or failed requests at concurrency ${concurrency}`);
+    for (const record of records) {
+      const diagnostic = record.steps?.find(step => step.name === "profiling");
+      if (!diagnostic && !record.key.taskId.endsWith("-profiling")) continue;
+      if (record.errors.some(error => error.message.includes("stop_profile unconfirmed")) ||
+          (record.executionStatus === "cancelled" && !diagnostic?.verdict) || record.cleanupStatus === "unconfirmed")
+        throw new Error(`Profiling skipped: service cleanup unconfirmed after ${record.key.taskId}; inspect the profiler before running ${ref.id}`);
     }
-    for (const concurrency of this.config.concurrency) {
-      const diagnosticId = this.id(concurrency) + "-profiling";
-      if (diagnosticId === ref.id) break;
-      const prior = records.find(r => r.key.taskId === diagnosticId);
-      if (!prior || !isEvaluationComplete(prior)) throw new Error(`Profiling skipped: preceding diagnostic incomplete at concurrency ${concurrency}`);
-    }
+  }
+
+  evaluateSteps(_task: PreparedTask, results: AttemptStepResult[]): { verdict: VerifyResult | null; continue: boolean } {
+    const last = results.at(-1);
+    if (!last?.verdict || !last.solve) return { verdict: null, continue: false };
+    if (last.name === "performance" && !successfulAgentXWindow(parseAgentXSummary(last.solve.observations)))
+      throw new Error("Profiling skipped: missing or failed requests in the formal measurement");
+    return { verdict: last.verdict, continue: last.name === "performance" };
   }
 
   private id(concurrency: number): string { return `agentx-${this.config.variant}-${this.config.mode}-c${concurrency}`; }
@@ -162,23 +160,30 @@ export class AgentXBenchmark implements Benchmark {
     const tracePath = this.source instanceof LocalRecordSource
       ? await this.source.files.file(source, "traces.jsonl", signal)
       : (await this.cache.fetch(file.origin, file.sha256, signal, token ? { Authorization: `Bearer ${token}` } : undefined)).path;
-    const payload: AgentXWorkload = { schemaVersion: 1, kind: "agentx", variant: this.config.variant, mode: this.config.mode,
+    const base: AgentXWorkload = { schemaVersion: 1, kind: "agentx", variant: this.config.variant, mode: this.config.mode,
       concurrency, durationSeconds: this.config.durationSeconds, seed: this.config.seed, dataset: this.dataset,
       loader: `semianalysis_cc_traces_weka_062126${this.config.variant === "256k" ? "_256k" : ""}`,
       revision: source.revision, sha256: file.sha256, tracePath: "input/traces.jsonl",
-      ...(this.config.traceCount === undefined ? {} : { traceCount: this.config.traceCount }),
-      ...(diagnostic && this.config.profiling ? { mode: "replay", traceCount: this.config.profiling.traceCount ?? concurrency,
-        collection: { type: "profiling", profiling: this.config.profiling } } :
-        this.config.profiling || this.config.engineMetrics ? { collection: { type: "performance", ...(this.config.measurementMode ? { sampleWindow: true as const } : {}),
-          ...(this.config.engineMetrics ? { engineMetrics: this.config.engineMetrics } : {}) } } : {}) };
-    return { input: { id: ref.id, prompt: `AgentX ${this.config.variant} ${this.config.mode}: ${concurrency} concurrent session trees`, payload },
-      verification: payload, solveEnv: { workdir: ".", image: null, initialFiles: [{ source: tracePath, target: payload.tracePath }],
-        runtime: [], ...(this.environmentName === "docker" ? { network: "host", build: { context: agentXAssets,
-          dockerfile: "Dockerfile", sourceHash: await agentXBridgeDigest(signal) } } : {}) },
-      verifyEnv: null, transfer: null, verificationMode: "none",
-      artifactCollection: this.environmentName === "docker"
-        ? { kind: "artifacts", workdir: "/workspace", paths: ["/workspace/agentx-artifacts"] }
-        : { kind: "artifacts", workdir: ".", paths: ["agentx-artifacts"] } };
+      ...(this.config.traceCount === undefined ? {} : { traceCount: this.config.traceCount }) };
+    const formal: AgentXWorkload = this.config.profiling || this.config.engineMetrics ? { ...base,
+      collection: { type: "performance", ...(this.config.measurementMode ? { sampleWindow: true } : {}),
+        ...(this.config.engineMetrics ? { engineMetrics: this.config.engineMetrics } : {}) } } : base;
+    const solveEnv: PreparedTask["solveEnv"] = { workdir: ".", image: null, initialFiles: [{ source: tracePath, target: base.tracePath }],
+      runtime: [], ...(this.environmentName === "docker" ? { network: "host", build: { context: agentXAssets,
+        dockerfile: "Dockerfile", sourceHash: await agentXBridgeDigest(signal) } } : {}) };
+    const taskFor = (payload: AgentXWorkload): PreparedTask => {
+      const workdir = this.environmentName === "docker" ? "/workspace" : ".";
+      const directory = payload.collection ? "agentx-" + payload.collection.type : "agentx-artifacts";
+      return { input: { id: ref.id, prompt: `AgentX ${payload.variant} ${payload.mode}: ${concurrency} concurrent session trees`, payload },
+        verification: payload, solveEnv, verifyEnv: null, transfer: null, verificationMode: "none",
+        artifactCollection: { kind: "artifacts", workdir, paths: [workdir === "." ? directory : workdir + "/" + directory] } };
+    };
+    const performance = taskFor(formal);
+    if (!this.config.profiling) return performance;
+    const profiling = taskFor({ ...base, mode: "replay", traceCount: this.config.profiling.traceCount ?? concurrency,
+      collection: { type: "profiling", profiling: this.config.profiling } });
+    if (diagnostic) return profiling;
+    return { ...performance, steps: [{ name: "performance", task: performance }, { name: "profiling", task: profiling }] };
   }
 
   async planRun(refs: TaskRef[], source: SourceLock, signal: AbortSignal, activity?: ActivityListener): Promise<BenchmarkRunPlan> {
@@ -189,7 +194,7 @@ export class AgentXBenchmark implements Benchmark {
       tasks.push(await withDatasetActivity(activity, () => this.prepare(ref, source, signal)));
       activity?.({ lines: [`Planning completed ${tasks.length}/${refs.length}`] });
     }
-    return { tasks, preparation: { defaultTimeoutSeconds: 3600 }, policy: { version: "agentx-1.0.7-preparation-v2", source: "agentx profile" } };
+    return { tasks, preparation: { defaultTimeoutSeconds: 3600 }, policy: { version: "agentx-1.0.7-preparation-v3", source: "agentx profile" } };
   }
 
   async verify(task: PreparedTask, result: SolveResult, _session: unknown, signal: AbortSignal): Promise<VerifyResult> {

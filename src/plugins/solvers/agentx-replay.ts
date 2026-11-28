@@ -114,17 +114,21 @@ export class AgentXReplaySolver implements Solver {
     const profile = collection?.type === "profiling" ? collection.profiling : undefined;
     const binding = profile?.service ? bindService(this.runtime, profile.service) : this.binding;
     const ascend = profile ? undefined : this.config.telemetry?.ascend;
-    const root = join(context.paths.artifacts, "agentx");
-    const point = "point-" + workload.concurrency;
-    const output = profile ? posix.join("profiling", point, "outputs") : posix.join("outputs", point);
+    const directory = collection ? join(context.paths.root, collection.type) : context.paths.agent;
+    const copyOutputs = (phase: "performance" | "profiling") => session.download("agentx-" + phase,
+      phase === "profiling" ? join(directory, "outputs") : directory, context.signal);
     let sampling: HostNpuSampling | undefined;
-    if (ascend && "mode" in ascend) {
-      context.activity?.({ message: "Starting read-only NPU sampling on the host", activity: true });
-      sampling = await startHostTelemetry(ascend.devices, join(context.paths.agent, "host-telemetry"), context.signal,
-        this.runtime.environmentName === "local" ? python : undefined);
-    }
-    const measure = () => this.executeMeasurement(input, session, python, runner, lexicon, context, binding, sampling);
+    let outputsStarted = false;
+    const measure = () => {
+      outputsStarted = true;
+      return this.executeMeasurement(input, session, python, runner, lexicon, context, binding, sampling);
+    };
     try {
+      if (ascend && "mode" in ascend) {
+        context.activity?.({ message: "Starting read-only NPU sampling on the host", activity: true });
+        sampling = await startHostTelemetry(ascend.devices, join(directory, "host-telemetry"), context.signal,
+          this.runtime.environmentName === "local" ? python : undefined);
+      }
       let summary: AgentXSummary;
       if (profile) {
         const warmup = async () => {
@@ -133,7 +137,7 @@ export class AgentXReplaySolver implements Solver {
         };
         const captured = await captureAgentXProfile({
           endpoint: expectNonEmptyString(binding.model.endpoint, "AgentX profiling service"), key: binding.auth.value,
-          ...profile, directory: profile.traceDirectory, destination: join(root, "profiling", point, "trace"),
+          ...profile, directory: profile.traceDirectory, destination: join(directory, "trace"),
           exportTimeoutSeconds: profile.exportTimeoutSeconds, signal: context.signal,
           ...(this.config.pythonExecutable ? { pythonExecutable: this.config.pythonExecutable } : {}),
         }, measure, profile.provider ? warmup : undefined);
@@ -143,24 +147,34 @@ export class AgentXReplaySolver implements Solver {
         summary = await measure();
       }
       if (collection) {
-        await session.download("agentx-artifacts", join(root, output), context.signal);
-        await writeFile(join(root, "collections.json"), JSON.stringify({ points: [{ concurrency: workload.concurrency, dataset: workload.dataset,
-          ...(profile ? { profiling: summary.deviceProfile } : { performanceDirectory: output, performanceStatus:
+        summary.artifactDirectory = collection.type;
+        await copyOutputs(collection.type);
+        outputsStarted = false;
+        await writeFile(join(directory, "collections.json"), JSON.stringify({ points: [{ concurrency: workload.concurrency, dataset: workload.dataset,
+          ...(profile ? { profiling: summary.deviceProfile } : { performanceDirectory: collection.type, performanceStatus:
             successfulAgentXWindow(summary) ? "measured" : "partial",
             ...(summary.engine ? { engine: summary.engine } : {}) }) }] }, null, 2) + "\n");
       }
-      await writeFile(join(context.paths.agent, "agentx-summary.json"), JSON.stringify(summary, null, 2) + "\n", "utf8");
+      await writeFile(join(directory, "agentx-summary.json"), JSON.stringify(summary, null, 2) + "\n", "utf8");
       return { finalText: `AgentX completed at ${workload.concurrency} concurrent session trees`, usage: profile ?
         { inputTokens: null, outputTokens: null, totalTokens: null } : agentXUsage(summary), observations: summary };
     } catch (error) {
-      if (profile) {
-        await mkdir(root, { recursive: true });
-        await writeFile(join(root, "collections.json"), JSON.stringify({ points: [{ dataset: workload.dataset, concurrency: workload.concurrency,
-          profiling: { status: "failed", error: redactDiagnostic(error instanceof Error ? error.message : "AgentX profiling failed", [binding.auth.value]) } }] }) + "\n");
+      if (collection) {
+        const describe = (cause: unknown) => redactDiagnostic(cause instanceof Error ? cause.message : "AgentX collection failed", [binding.auth.value]);
+        await mkdir(directory, { recursive: true });
+        let copyError: string | undefined;
+        if (outputsStarted && !context.signal.aborted) {
+          try { await copyOutputs(collection.type); }
+          catch (cause) { copyError = describe(cause); }
+        }
+        const failure = { status: "failed", error: describe(error), ...(copyError ? { copyError } : {}) };
+        const point = { dataset: workload.dataset, concurrency: workload.concurrency,
+          ...(profile ? { profiling: failure } : { performanceStatus: "failed", ...failure }) };
+        await writeFile(join(directory, "collections.json"), JSON.stringify({ points: [point] }, null, 2) + "\n");
       }
       throw error;
     } finally {
-      if (sampling) await writeFile(join(context.paths.agent, "host-telemetry.json"),
+      if (sampling) await writeFile(join(directory, "host-telemetry.json"),
         JSON.stringify({ localAscend: await sampling.finish() }, null, 2) + "\n", "utf8");
     }
   }
@@ -175,6 +189,7 @@ export class AgentXReplaySolver implements Solver {
     if (base === null) throw new TypeError("Missing AgentX endpoint");
     const endpoint = agentXEndpoint(base);
     const tokenizerPath = this.runtime.environmentName === "local" ? join(session.workdir, "agentx-tokenizer") : posix.join(session.workdir, "agentx-tokenizer");
+    const artifactDirectory = warmup ? "agentx-warmup" : workload.collection ? "agentx-" + workload.collection.type : "agentx-artifacts";
     const request = { schemaVersion: 1, key: context.key, workload, ...endpoint,
       ...(workload.collection?.type === "performance" && workload.collection.engineMetrics ? { engineMetrics: {
         sampleWindow: workload.collection.sampleWindow, names: workload.collection.engineMetrics, apiKey: binding.auth.value,
@@ -184,7 +199,7 @@ export class AgentXReplaySolver implements Solver {
       ...(sampling ? { hostAscend: sampling.targets } : {}),
       model: binding.model.name, auth: binding.auth, tokenizerPath, trustRemoteCode: this.config.trustRemoteCode,
       ...(binding.model.reasoningEffort === undefined ? {} : { reasoningEffort: binding.model.reasoningEffort }),
-      artifactDir: this.runtime.environmentName === "local" ? join(session.workdir, warmup ? "agentx-warmup" : "agentx-artifacts") : posix.join(session.workdir, warmup ? "agentx-warmup" : "agentx-artifacts"),
+      artifactDir: this.runtime.environmentName === "local" ? join(session.workdir, artifactDirectory) : posix.join(session.workdir, artifactDirectory),
       outputDir: warmup ? posix.join(session.agentOutputDir, "warmup") : session.agentOutputDir, ...(this.config.requestTimeoutSeconds === undefined ? {} : { requestTimeoutSeconds: this.config.requestTimeoutSeconds }) };
     const handle = await session.start({ executable: python, args: [runner], cwd: session.workdir,
       env: { PYTHONDONTWRITEBYTECODE: "1", PYTHONUNBUFFERED: "1", PYTHONIOENCODING: "utf-8", PYTHONUTF8: "1" }, input: Buffer.from(JSON.stringify(request)) }, context.signal);
@@ -212,7 +227,9 @@ export class AgentXReplaySolver implements Solver {
         return terminal;
       };
       const [stdout, stderr, exit] = await Promise.all([observedOutput(), collect(handle.stderr, 1024 * 1024), handle.done]);
-      await writeFile(join(context.paths.agent, "bridge-stderr.log"), redactDiagnostic(stderr, [binding.auth.value]), "utf8");
+      const logDirectory = workload.collection ? join(context.paths.root, workload.collection.type) : context.paths.agent;
+      await mkdir(logDirectory, { recursive: true });
+      await writeFile(join(logDirectory, warmup ? "warmup-stderr.log" : "bridge-stderr.log"), redactDiagnostic(stderr, [binding.auth.value]), "utf8");
       context.signal.throwIfAborted();
       if (exit.code !== 0 || exit.signal !== null) throw new Error("AgentX Harness failed; see collected Harness artifacts and bridge-stderr.log");
       const lines = stdout.trim().split(/\r?\n/u);

@@ -125,7 +125,7 @@ networkLatency: # 放在 benchmark.solver.config 下
 
 `meanMs` 必须为非负有限数；手动模式不进行 TCP 探测，不能填写 `pingIntervalSeconds`。自动模式不能填写 `meanMs`。配置未知字段或混用两种模式的参数会在执行前报错。
 
-校准结果保存在 `result.json` 的 `solve.observations.networkLatency`、`agent/agentx-summary.json` 及对应 `metrics.json` 中。报告逐测量点显示校准模式、用于扣除的平均 RTT、探测总数/成功数/失败数，以及 TTFT、TTFO 和请求延迟的原始值与修正值（均值、P50、P95、P99）。修正分布直接读取官方 `network_adjusted_*` 导出，不在 Evaluator 中重算。ITL、吞吐和报告原有性能对比表继续使用原始指标。
+常规压测的校准结果保存在 `result.json` 的 `solve.observations.networkLatency`、`agent/agentx-summary.json` 及对应 `metrics.json` 中。报告逐测量点显示校准模式、用于扣除的平均 RTT、探测总数/成功数/失败数，以及 TTFT、TTFO 和请求延迟的原始值与修正值（均值、P50、P95、P99）。修正分布直接读取官方 `network_adjusted_*` 导出，不在 Evaluator 中重算。ITL、吞吐和报告原有性能对比表继续使用原始指标。
 
 `complete` 表示有可用 RTT 和对应修正指标；部分探测失败、探测记录缺失或部分修正指标缺失时记为 `partial`，保留已有数据和告警；没有可用 RTT 或修正指标时记为 `unavailable`。缺失值显示 `—`，不补成 0，也不让网络校准缺失替代请求测评的成功/失败判断。固定版本 Harness 对手动 `meanMs: 0` 可能不导出校准指标，此时明确显示不可用，原始指标仍保留。
 
@@ -137,7 +137,7 @@ networkLatency: # 放在 benchmark.solver.config 下
 
 每个并发点对应独立 attempt，保存：
 
-- `agent/agentx-summary.json`：版本化摘要；同一摘要也保存在结果的 `solve.observations`。
+- 常规压测的版本化摘要在 `agent/agentx-summary.json`。使用服务指标或诊断采集时，相应轮次的摘要在 `performance/agentx-summary.json` 或 `profiling/agentx-summary.json`。双轮运行在 `result.json` 的 `steps[].solve.observations` 保存逐轮摘要。
 - `agent/trajectory.jsonl`、`session.jsonl` 和脱敏桥接日志。
 - `artifacts/artifacts.tar`：Harness 原始导出和日志，包含内部 `agentx-artifacts` 目录；失败时保留可收集的部分产物。
 - replay 另存 `agent/replay-coverage.json`，按 trace id、原始外层/内层索引核对请求覆盖率；同一证据也收入原始产物包。报告展示完成的 trace、采集请求、失败、取消、缺失和重复数量。
@@ -255,7 +255,7 @@ SSH 认证属于部署操作，不写入实验 YAML。模型必须支持所选 T
 | --- | --- | --- |
 | `performance` | 关闭采集的服务上运行正式负载 | 请求吞吐、token 吞吐、TTFT、TPOT、ITL、请求时延，以及 KV Cache 和队列 |
 | `profiling` | 一棵树预热，再采集一次有界回放 | 所选诊断类型的证据及原始文件位置 |
-| `all` | 先跑完所有正式档，再依次跑相同并发的诊断档 | 一份报告按并发对齐两轮结果，诊断失败时仍保留正式成绩 |
+| `all` | 每档并发建一个任务，在同一个 attempt 里先跑正式轮，再跑诊断轮 | 一份报告按并发对齐两轮结果，诊断失败时仍保留正式成绩 |
 
 ```bash
 arsi-evaluator run playbook/agentx/agentx-service-profiling.yaml
@@ -263,7 +263,7 @@ arsi-evaluator run playbook/agentx/agentx-service-profiling.yaml
 
 示例在正式和诊断两轮都使用相同的前 8 棵会话树，分别按并发 1 和 8 回放。省略 `profiling.traceCount` 时，每个诊断档的树数等于会话并发数。一棵树可以发送多次请求。`scenario: standard` 保留 Harness 的预热和正式窗口，诊断始终使用有界回放。请求级 TPOT 为一次成功请求的（总时延 − 首 token 时延）除以（输出 token 数 − 1），仅纳入至少两个输出 token 的请求。
 
-正式轮从服务的 `/metrics` 每秒采样，并保留正式时间窗口内的原始 JSONL。默认读取 vLLM 的 KV Cache 使用率、运行和等待请求数。用 `engineMetrics` 可指定其他 Prometheus 名称。Gauge 显示每组标签的均值、峰值和样本数，Counter 显示增量；重置或缺失会标为 `partial`。未配置 `measurementMode` 的旧实验沿用原有轮次及采样方式。
+正式轮从服务的 `/metrics` 每秒采样，并保留正式时间窗口内的原始 JSONL。默认读取 vLLM 的 KV Cache 使用率、运行和等待请求数。用 `engineMetrics` 可指定其他 Prometheus 名称。Gauge 显示每组标签的均值、峰值和样本数，Counter 显示增量；重置或缺失会标为 `partial`。省略 `measurementMode` 时仍按原配置选择采集内容和采样方式。
 
 | `profiling.preset` | 服务准备及采集内容 |
 | --- | --- |
@@ -282,7 +282,7 @@ arsi-evaluator run playbook/agentx/agentx-service-profiling.yaml
 | 显存或缓存是否受限 | 优先读取 rank 数据库 HBM 表的通道读写时序（Byte/s 转十进制 MB/s）；服务版本也可能将其写到 msprof CSV。L2 从实际导出读取，保留命中及缺失重分配的口径。 |
 | 多卡通信拖慢了多少 | 每个 rank 的 HCCL 调用耗时、等待、计算重叠，以及通信矩阵中各链路的传输类型、大小、耗时和带宽。不同 rank 的时间独立统计。 |
 
-每个诊断 attempt 的 `trace/` 保留新增的 API 进程 trace 和 rank 文件，包括原生分析目录、profiler 数据库、元信息和可重分析的原始数据。每个 rank 的 `evaluator-artifacts.json` 按相对路径列出文件和大小。分析多卡通信时，可从 `ASCEND_PROFILER_OUTPUT/communication.json` 查看逐次调用，从同目录下的 `communication_matrix.json` 查看链路。磁盘需求随 rank 数和采集窗口增长。专项计数器覆盖 profiler 开启到停止的窗口，包含回放客户端的准备和收尾。
+每个并发档的 `profiling/trace/` 保留新增的 API 进程 trace 和 rank 文件，包括原生分析目录、profiler 数据库、元信息和可重分析的原始数据。每个 rank 的 `evaluator-artifacts.json` 按相对路径列出文件和大小。分析多卡通信时，可从 `ASCEND_PROFILER_OUTPUT/communication.json` 查看逐次调用，从同目录下的 `communication_matrix.json` 查看链路。磁盘需求随 rank 数和采集窗口增长。专项计数器覆盖 profiler 开启到停止的窗口，包含回放客户端的准备和收尾。
 
 模板中的 `devices: [0, 1]` 指向同机推理服务使用的两张物理卡，请按部署调整。如果压测端通过网络访问推理服务，移除本机卡号，使用共享 trace 目录和服务节点的 `nodeMetrics`。磁盘、网络的计数器同时提供窗口增量和按实际采样时长计算的每秒速率。
 
@@ -300,6 +300,17 @@ arsi-evaluator run playbook/agentx/agentx-service-profiling.yaml
         names: [node_cpu_seconds_total, node_memory_MemAvailable_bytes, node_network_receive_bytes_total]
 ```
 
-`report.md` 和 `metrics.json` 可离线重建。每档正式产物位于对应 attempt 的 `artifacts/agentx/outputs/point-<并发>/`，诊断产物位于 `artifacts/agentx/profiling/point-<并发>/`。从 `trace/` 可查各 rank 导出或 msprof 的原始列名和单位，共享目录保留服务原始 trace。可用 `profiling.service` 选择独立的同模型诊断实例，使服务级 profiler 专用于本次实验。
+`report.md` 和 `metrics.json` 可离线重建。以 `concurrency: [1, 8]` 和 `measurementMode: all` 为例，顺序是并发 1 正式轮 → 并发 1 诊断轮 → 并发 8 正式轮 → 并发 8 诊断轮。报告中的正式时延和吞吐只取该档的正式轮。可从报告中的产物路径找到对应并发档。
+
+```text
+tasks/<任务哈希>/attempts/<attempt-id>/
+├── performance/       # 正式轮的请求、Harness 导出、引擎指标和汇总
+├── profiling/
+│   ├── outputs/       # 诊断轮自己的 Harness 导出和回放覆盖
+│   └── trace/         # 服务端 profiler 和已配置的硬件采样产物
+└── steps/             # evaluator 保存的逐轮执行记录、日志和会话轨迹
+```
+
+单轮模式仅生成所选轮次的测量目录。诊断失败时，报告保留已验证的正式结果和失败原因。重试该任务会在新的 attempt 里重新执行所选轮次。`run.timeoutSeconds` 是整档的总时限，需覆盖两轮运行及 trace 导出。原有分任务运行仍可按原目录离线生成报告。尚未完成的旧双轮运行需使用原版本续跑，或用当前版本新开一次运行。共享目录保留服务的原始 trace。可用 `profiling.service` 选择独立的同模型诊断实例，使服务级 profiler 专用于本次实验。
 
 [返回用户手册](../README.zh-CN.md) · [快速上手](../quick-start.zh-CN.md)

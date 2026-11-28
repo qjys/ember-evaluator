@@ -144,10 +144,19 @@ class Handler(BaseHTTPRequestHandler):
             if self.headers.get("Authorization") != "Bearer " + secret:
                 self.send_error(403)
                 return
-            body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            payload = self.rfile.read(int(self.headers.get("Content-Length", 0)))
             if self.path == "/start_profile":
-                assert active_profile is None and body["activities"] == ["CPU", "NPU"]
-                active_profile = Path(body["output_dir"])
+                if "--reject-profile" in sys.argv:
+                    collection_events.append([self.path, len(calls)])
+                    self.send_error(409)
+                    return
+                assert active_profile is None
+                if payload:
+                    body = json.loads(payload)
+                    assert body["activities"] == ["CPU", "NPU"]
+                    active_profile = Path(body["output_dir"])
+                else:
+                    active_profile = root / "traces" / ("capture-" + str(len(calls)))
             else:
                 directory = active_profile / "rank0" / "ASCEND_PROFILER_OUTPUT"
                 directory.mkdir(parents=True)
@@ -158,7 +167,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", "0")
             self.end_headers()
             return
-        for process in psutil.Process().children(recursive=True):
+        # In server-only mode the evaluator owns the Harness processes. This fixture has no Harness children to inspect.
+        for process in ([] if "--serve" in sys.argv else psutil.Process().children(recursive=True)):
             try:
                 assert secret not in "\0".join(process.cmdline()), "Credential in Harness process arguments"
             except (psutil.NoSuchProcess, psutil.AccessDenied):

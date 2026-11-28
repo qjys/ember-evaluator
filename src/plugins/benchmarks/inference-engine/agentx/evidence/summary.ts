@@ -124,6 +124,8 @@ export type AgentXSummary = {
   telemetry?: AgentXTelemetry;
   engine?: Record<string, JsonValue>;
   deviceProfile?: Record<string, JsonValue>;
+  /** Attempt-relative public evidence directory. Historical runs used per-task point directories. */
+  artifactDirectory?: "performance" | "profiling";
   msprof?: MsprofSummary;
   /** Persisted even when collection failed, to distinguish failure from not-enabled. */
   msprofAttempt?: AgentXMsprofAttempt;
@@ -264,6 +266,9 @@ export function parseAgentXSummary(value: unknown): AgentXSummary {
     typeof raw.comparable !== "boolean" || (raw.upstreamSubmissionValid !== null && typeof raw.upstreamSubmissionValid !== "boolean"))
     throw new TypeError("Invalid AgentX summary");
   const workload = parseWorkload(raw.workload);
+  const directory = raw.artifactDirectory;
+  if (directory !== undefined && (directory !== workload.collection?.type || (directory !== "performance" && directory !== "profiling")))
+    throw new TypeError("Invalid AgentX artifact directory");
   const lexicon = expectRecord(raw.lexicon, "AgentX lexicon");
   for (const key of ["source", "revision", "digest"]) expectNonEmptyString(lexicon[key], `AgentX lexicon.${key}`);
   if (!/^[a-f0-9]{64}$/u.test(String(lexicon.digest)) ||
@@ -291,6 +296,7 @@ export function parseAgentXSummary(value: unknown): AgentXSummary {
   if (raw.comparable && (workload.mode !== "standard" || workload.durationSeconds !== 3600 || raw.upstreamSubmissionValid !== true || incomparableReasons.length))
     throw new TypeError("Invalid AgentX comparability");
   return { schemaVersion: 1, kind: "agentx", harnessVersion: AGENTX_VERSION, workload,
+    ...(directory === undefined ? {} : { artifactDirectory: directory }),
     lexicon: { source: String(lexicon.source), revision: String(lexicon.revision), digest: String(lexicon.digest) },
     profiling, warmup: savedStatistics(raw.warmup),
     upstreamSubmissionValid: raw.upstreamSubmissionValid, upstreamInvalidReasons: strings(raw.upstreamInvalidReasons),

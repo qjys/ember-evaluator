@@ -80,6 +80,30 @@ test.each([60, 3600])("HF source locks exact bytes and passes the %s-second wind
   await expect(benchmark.verify(task, { finalText: "", usage: { inputTokens: null, outputTokens: null, totalTokens: null }, observations: { ...summary, workload: { ...summary.workload, concurrency: 8 } } }, null, signal())).rejects.toThrow(/locked measurement point/);
 });
 
+test("paired steps lock the same corpus and concurrency and skip diagnostics on a partial formal window", async () => {
+  const dir = await root();
+  await writeFile(join(dir, "traces.jsonl"), '{"id":"trace"}\n');
+  const bench = new AgentXBenchmark(parseAgentXConfig({ localPath: dir, cacheDir: join(dir, "cache"), concurrency: [1, 8],
+    measurementMode: "all", profiling: { traceDirectory: resolve(dir, "traces") } }), "local");
+  const source = await bench.resolveSource(null, signal());
+  const refs: TaskRef[] = [];
+  for await (const ref of bench.enumerate(source, signal())) refs.push(ref);
+  const plan = await bench.planRun(refs, source, signal());
+  expect(plan.tasks).toHaveLength(2);
+  for (const task of plan.tasks) {
+    const [formal, diagnostic] = task.steps ?? [];
+    if (!formal || !diagnostic) throw new Error("Missing paired steps");
+    const locked = expectRecord(formal.task.input.payload, "formal");
+    expect(diagnostic.task.input.payload).toMatchObject({ mode: "replay", concurrency: locked.concurrency,
+      traceCount: locked.concurrency, sha256: locked.sha256 });
+    const result = { finalText: "", usage: { inputTokens: null, outputTokens: null, totalTokens: null },
+      observations: normalizeAgentXExport({ ...profileExport(), error_request_count: { unit: "requests", avg: 1 } },
+        { ...workload, collection: { type: "performance" } }, lexicon) };
+    expect(() => bench.evaluateSteps(task, [{ name: "performance", solve: result, verdict: { passed: null, details: {} },
+      evidencePath: "steps/performance", errors: [], startedAt: "", finishedAt: "" }])).toThrow(/Profiling skipped/);
+  }
+});
+
 test("tokenizer resume reuses its pinned revision, and content changes alter its identity", async () => {
   const path = await root();
   const directory = join(path, "tokenizer"); await mkdir(directory);
