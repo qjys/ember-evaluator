@@ -335,6 +335,8 @@ export async function runTask(
   // Hash after processes stop writing; store verifies the same inventory before
   // publishing result.json. Store allocation/publication errors remain global.
   const phases = paths.measurementPoint ? artifactDirectories.map(spec => spec.name) : [];
+  // SSH solvers write their files directly instead of exporting an environment directory.
+  if (paths.measurementPoint && !multiTask && !phases.length && solveStarted) phases.push("performance");
   if (paths.measurementPoint && !multiTask && phases[0]) {
     await fileMeasurementEvidence(paths.root, phases[0]).catch(error => failure("collect", error, "ARTIFACT_COLLECTION_INCOMPLETE"));
   }
@@ -352,7 +354,8 @@ export async function runTask(
   const states = await Promise.all(prefixes.map(prefix => trajectoryState(join(paths.root, prefix), files, key, solveStarted, prefix)));
   record.collection.trajectory = states.every(s => s === "not-produced") ? "not-produced" :
     states.every(s => s === "complete") ? "complete" : states.every(s => s === "missing") ? "missing" : "partial";
-  const isDirectoryArtifact = (path: string) => artifactDirectories.some(spec => path.startsWith(spec.name + "/outputs/"));
+  const isDirectoryArtifact = (path: string) => artifactDirectories.some(spec => path.startsWith(spec.name + "/outputs/")) ||
+    (paths.measurementPoint && (path.startsWith("performance/outputs/") || path.startsWith("performance/artifacts/") || path.startsWith("profiling/")));
   const artifactFiles = files.files.filter(file => file.path.startsWith("artifacts/") || file.path.startsWith("logs/artifacts/") || isDirectoryArtifact(file.path));
   const missingArtifacts = files.missing.some(file => file.path.startsWith("artifacts/") || isDirectoryArtifact(file.path));
   record.collection.artifacts = missingArtifacts

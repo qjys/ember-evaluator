@@ -33,9 +33,12 @@ export async function apply(ctx: Context): Promise<void> {
   ctx.evaluator.register("benchmark", "aisbench-native", parseNativeConfig, (config, runtime) => new NativeBenchmark(config, runtime));
   ctx.evaluator.register("metrics", "aisbench-native-performance", emptyConfig, () => new NativePerformanceMetrics());
   ctx.evaluator.register("reporter", "aisbench-native-markdown", emptyConfig, () => new NativeMarkdownReporter());
-  ctx.evaluator.register("solver", "aisbench-ssh", parseAisbenchSshConfig, (config, runtime) =>
-    new AisbenchSshSolver({ ...config, remote: { ...config.remote, ssh: { ...config.remote.ssh,
-      ...(config.remote.ssh.identityFile === undefined ? {} : { identityFile: runtime.resolvePath(config.remote.ssh.identityFile) }) } } }, runtime));
+  ctx.evaluator.register("solver", "aisbench-ssh", parseAisbenchSshConfig, (config, runtime) => {
+    const solver = new AisbenchSshSolver({ ...config, remote: { ...config.remote, ssh: { ...config.remote.ssh,
+      ...(config.remote.ssh.identityFile === undefined ? {} : { identityFile: runtime.resolvePath(config.remote.ssh.identityFile) }) } } }, runtime);
+    ctx.effect(() => () => solver.dispose(), "AISBench generated dataset");
+    return solver;
+  });
   ctx.evaluator.register("metrics", "aisbench-performance", emptyConfig, () => new AisbenchPerformanceMetrics());
   ctx.evaluator.register("reporter", "aisbench-markdown", emptyConfig, () => new AisbenchMarkdownReporter());
 }

@@ -30,12 +30,13 @@ async function evidencePathState(root: string, path: string): Promise<"absent" |
 export function safeTaskKey(taskId: string): string {
   return createHash("sha256").update(taskId).digest("hex");
 }
+export function measurementDirectory(concurrency: number | null | undefined): string {
+  if (concurrency === null) return "configured";
+  if (concurrency === undefined || !Number.isSafeInteger(concurrency) || concurrency < 1) throw new Error("Unknown measurement point");
+  return `c${concurrency}`;
+}
 export function resultDirectory(run: RunManifest, key: AttemptKey): string {
-  if (run.resultLayout) {
-    const concurrency = run.resultLayout.points[key.taskId];
-    if (!Number.isSafeInteger(concurrency) || !concurrency || concurrency < 1) throw new Error("Unknown measurement point");
-    return `c${concurrency}`;
-  }
+  if (run.resultLayout) return measurementDirectory(run.resultLayout.points[key.taskId]);
   return `tasks/${safeTaskKey(key.taskId)}/attempts/${key.attemptId}`;
 }
 export function evidencePath(path: string): string {

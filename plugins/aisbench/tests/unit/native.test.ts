@@ -100,7 +100,7 @@ test("hashes uploaded scripts and detects changes before execution", async () =>
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
-test.each([false, true])("runs one native SSH job and rebuilds evidence with service collection %s", async collect => {
+test.each([false, true])("reads a historical single-job native selection with service collection %s", async collect => {
   const root = await mkdtemp(join(tmpdir(), "native-evidence-"));
   const signal = new AbortController().signal;
   const runtime = factory(root);
@@ -109,7 +109,7 @@ test.each([false, true])("runs one native SSH job and rebuilds evidence with ser
   if (collect) runtime.services.diagnostic = { model: { name: "vl", endpoint: "http://diag/v1", api: "openai-completions", provider: null },
     auth: { value: "fixture-diagnostic-key", reference: null } };
   const bench = new NativeBenchmark(config, runtime);
-  const source = await bench.resolveSource(null, signal);
+  const source = { ...await bench.resolveSource(null, signal), revision: "1" };
   const refs = [];
   for await (const ref of bench.enumerate(source, signal)) refs.push(ref);
   const [ref] = refs;
@@ -163,3 +163,69 @@ test.each([false, true])("runs one native SSH job and rebuilds evidence with ser
   } finally { vi.restoreAllMocks(); await rm(root, { recursive: true, force: true }); }
 });
 async function unexpected(): Promise<never> { throw new Error("Unexpected environment call"); }
+
+test("generated inputs are shared across point jobs and each job gets its paired request count", async () => {
+  const root = await mkdtemp(join(tmpdir(), "native-shared-"));
+  const signal = new AbortController().signal, runtime = factory(root);
+  const bench = new NativeBenchmark(parseNativeConfig({ ...generated, dataCount: [2, 5] }), runtime);
+  const solver = new AisbenchSshSolver(parseAisbenchSshConfig({ remote: { ssh: { host: "fixture", user: "u" },
+    pythonExecutable: "/python", aisbenchVersion: "fixture", workRoot: "/jobs" }, tokenizerPath: "/vl" }), runtime);
+  let batch = 0, count = 0;
+  const manifest = "/jobs/first/generated-input/data/manifest.json";
+  const calls = vi.spyOn(AisbenchRemoteClient.prototype, "call").mockResolvedValue({});
+  vi.spyOn(AisbenchRemoteClient.prototype, "deploy").mockResolvedValue();
+  const done = { state: "completed", phase: "", offset: 0, exitCode: 0, log: "", heartbeat: null };
+  vi.spyOn(AisbenchRemoteClient.prototype, "status")
+    .mockResolvedValueOnce({ ...done, state: "missing" }).mockResolvedValueOnce(done)
+    .mockResolvedValueOnce({ ...done, state: "missing" }).mockResolvedValueOnce(done);
+  vi.spyOn(AisbenchRemoteClient.prototype, "download").mockImplementation(async (_job, _fingerprint, dir) => {
+    await writeFile(join(dir, "native-plan.json"), JSON.stringify({ multimodalGeneration: { requests: 5, manifestPath: manifest } }));
+    const output = join(dir, "outputs", "performances", "model");
+    await mkdir(output, { recursive: true });
+    await writeFile(join(output, "dataset.json"), JSON.stringify({ "Success Requests": { total: String(count) }, "Failed Requests": { total: "0" } }));
+  });
+  try {
+    const source = await bench.resolveSource(null, signal);
+    for await (const ref of bench.enumerate(source, signal)) {
+      batch = ref.measurementConcurrency!;
+      count = batch === 1 ? 2 : 5;
+      const task = await bench.prepare(ref, source, signal);
+      const dir = join(root, "c" + batch);
+      const paths = { root: dir, agent: join(dir, "agent"), artifacts: join(dir, "artifacts"), verifier: join(dir, "verifier"), measurementPoint: true as const };
+      const session = { id: "local", metadata: {}, workdir: ".", agentOutputDir: ".", verifierOutputDir: ".",
+        start: unexpected, upload: unexpected, download: unexpected, exportState: unexpected, restoreState: unexpected, dispose: unexpected };
+      const result = await solver.solve(task.input, session, { key: { runId: "run", attemptId: "a", taskId: ref.id }, paths, signal });
+      expect(result.observations).toMatchObject({ groups: [{ concurrency: batch, status: "measured" }] });
+    }
+    expect(calls.mock.calls[0]?.[3]).toMatchObject({ config: { generationCount: 5, native: { dataCount: [2], concurrency: [1] } } });
+    expect(calls.mock.calls[1]?.[3]).toMatchObject({ config: { native: { dataCount: [5], concurrency: [8], multimodalManifest: manifest } } });
+    await solver.dispose();
+    expect(calls.mock.calls[2]?.[0]).toBe("release-generated-input");
+  } finally { vi.restoreAllMocks(); await rm(root, { recursive: true, force: true }); }
+});
+
+test("native-owned concurrency and dataset-only operations retain their distinct semantics", async () => {
+  const signal = new AbortController().signal;
+  const benchmark = new NativeBenchmark(parseNativeConfig({ remoteConfigFile: "/cfg.py" }), factory("."));
+  const source = await benchmark.resolveSource(null, signal);
+  const refs = [];
+  for await (const ref of benchmark.enumerate(source, signal)) refs.push(ref);
+  const point = refs[0];
+  if (!point) throw new Error("Missing native-config measurement");
+  expect(point?.measurementConcurrency).toBeNull();
+  expect((await benchmark.prepare(point, source, signal)).input.payload).toMatchObject({ native: { remoteConfigFile: "/cfg.py" } });
+  for (const config of [
+    { ...generated, multimodalAction: "prepare", multimodalGeneration: { ...generated.multimodalGeneration, outputDirectory: "/data" } },
+    { multimodalManifest: "/data/manifest.json", multimodalAction: "validate" },
+  ]) {
+    expect(new NativeBenchmark(parseNativeConfig(config), factory(".")).evaluationScenario).toBe("task");
+  }
+});
+
+test("a missing stop_profile confirmation blocks the following baseline", async () => {
+  const benchmark = new NativeBenchmark(parseNativeConfig({ ...selection, concurrency: [1, 8], profiling: { traceDirectory: "/trace" } }), factory("."));
+  const snapshot = aisbenchSnapshot();
+  const solve = snapshot.records[0]!.solve!;
+  solve.observations = { collections: [{ profiling: { status: "failed", error: "stop_profile unconfirmed" } }] };
+  await expect(benchmark.validatePrerequisites({ id: "next", recordKey: 8 }, async () => snapshot)).rejects.toThrow(/stop_profile unconfirmed/u);
+});

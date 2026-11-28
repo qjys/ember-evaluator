@@ -1,7 +1,7 @@
 import type { MeasurementMetricFile } from "../../core/contracts/metrics.js";
 import type { ResultSnapshot } from "../../core/contracts/result.js";
 import type { JsonValue } from "../../core/contracts/task.js";
-import { evidencePath } from "../../core/artifacts/artifacts.js";
+import { evidencePath, measurementDirectory } from "../../core/artifacts/artifacts.js";
 
 type Row = Record<string, JsonValue>;
 type Status = "measured" | "partial" | "unavailable";
@@ -111,13 +111,15 @@ function diagnostic(group: Group, profile: Row, directory: string): Section {
 /** Classify already verified observations. Source paths are relative to the run, including per-rank evidence. */
 export function agentXMeasurementFiles(snapshot: ResultSnapshot, metric: JsonValue): MeasurementMetricFile[] {
   const layout = snapshot.run.resultLayout;
-  if (!layout) return [];
+  if (!layout || row(metric).applicable !== true) return [];
   const results = new Map(rows(row(metric).points).map(point => [point.taskId, point]));
   const ids = snapshot.run.source ? snapshot.run.taskIds : Object.keys(layout.points);
   return (Object.keys(groups) as Group[]).map(path => {
     const file: MeasurementMetricFile = { path, status: {}, points: [] };
     for (const id of ids) {
-      const concurrency = layout.points[id]!, label = "c" + concurrency;
+      const concurrency = layout.points[id];
+      if (concurrency === undefined) throw new Error(`Missing AgentX measurement point for ${id}`);
+      const label = measurementDirectory(concurrency);
       if (!layout.requestedMetrics.includes(path)) { file.status[label] = "disabled"; continue; }
       const point = results.get(id.replace(/-profiling$/u, "")) ?? {};
       const summary = row(point.measurement), formalDir = label + "/performance", profileDir = label + "/profiling";

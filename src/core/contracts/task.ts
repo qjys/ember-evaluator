@@ -8,6 +8,8 @@ export type PhaseTimeoutOverrides = { solveTimeoutSeconds?: number; verifyTimeou
 export type TaskRef = {
   id: string;
   recordKey: JsonValue;
+  /** null means concurrency is owned by an external configuration. */
+  measurementConcurrency?: number | null;
 };
 
 export type TaskAttachment = {

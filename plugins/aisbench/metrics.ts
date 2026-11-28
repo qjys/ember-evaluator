@@ -3,6 +3,7 @@ import type { AttemptRecord, JsonValue, Metrics, ResultSnapshot } from "arsi-eva
 import { normalizedMetrics, parseAisbenchSummary } from "./evidence.js";
 import type { AisbenchSummary } from "./evidence.js";
 import { expectRecord } from "./validation.js";
+import { aisbenchMeasurementFiles } from "./measurement-files.js";
 
 type AisbenchPoint = { taskId: string; status: string; measurement: AisbenchSummary | null };
 type AisbenchMetric = { applicable: boolean; taskSetKnown?: false; points: AisbenchPoint[] };
@@ -53,6 +54,7 @@ function measurement(value: unknown, taskId: string, digest: string): AisbenchSu
 }
 
 export class AisbenchPerformanceMetrics implements Metrics {
+  readonly measurementFiles = aisbenchMeasurementFiles;
   readonly name = "aisbench-performance";
 
   async compute(snapshot: ResultSnapshot): Promise<JsonValue> {

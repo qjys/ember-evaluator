@@ -60,7 +60,7 @@ CLI `run` 和 SDK `Evaluator.run()` 使用 [application/run.ts](../../src/applic
 
 任务声明 `artifactDirectory` 时，执行器在求解环境静止后将同名工作目录发布到 attempt 的 `<name>/outputs/`。文件清单逐项校验原始文件；多步任务共用这份目录，失败或取消仍走相同的补收集流程。
 
-Benchmark 可通过 `resultLayout()` 声明按并发保存的推理引擎布局。manifest 固定布局版本，store 将每档直接写入 `cN/` 并只允许测量一次。指标插件通过 `measurementFiles()` 提供分类结果，store 发布文件、报告和 `metrics/index.json`。离线重建按 manifest 选择布局；历史运行使用原有清单和 attempt 路径。
+框架按测评场景选择产物布局。推理服务压测声明 `evaluationScenario: "inference-engine"`，在枚举的 TaskRef 中给出 `measurementConcurrency`。框架将选中的测量点随 source 一次锁入 manifest。AgentX 与 AISBench 共用每档一个 `cN/` 的布局。并发由外部原生配置决定时，传入 null，使用 `configured/`。指标插件通过 `measurementFiles()` 提供分类结果。GSM8K、算子测评和数据准备操作使用逐任务布局。离线重建以 run 自己的 manifest 为准。
 
 `createRunComponents` 和 `createBenchmark` 必须接收已有注册表，不负责打开或关闭注册表。前者返回不含 `dispose()` 的 `RunComponents`，后者直接返回 Benchmark；工厂创建的资源一直由该注册表管理，装配失败也由注册表所有者的 `finally` 清理。
 

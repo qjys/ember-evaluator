@@ -14,7 +14,7 @@
 
 ## 安装和构建
 
-需要按图片规格、文本长度和请求数生成负载时，使用[生成多模态数据示例](playbook/03-generated-multimodal.yaml)。压测机安装 AISBench 官方 Prefix Cache 插件后，Evaluator 会在同一远端作业内生成一次数据，再逐档测量。[制数配置说明](../../docs/users/benchmarks/aisbench.zh-CN.md#按图片规格生成数据)
+需要按图片规格、文本长度和请求数生成负载时，使用[生成多模态数据示例](playbook/03-generated-multimodal.yaml)。压测机安装 AISBench 官方 Prefix Cache 插件后，Evaluator 会在同一次测评中生成一次数据，再逐档测量。[制数配置说明](../../docs/users/benchmarks/aisbench.zh-CN.md#按图片规格生成数据)
 
 需要 Node.js 24.22.1（24.x）及 pnpm 11.22.0，宿主版本 `0.1.0`。在仓库根目录执行：
 
@@ -70,9 +70,9 @@ arsi-evaluator run plugins/aisbench/playbook/01-ssh.yaml
 
 ## 恢复、产物和离线报告
 
-每次 attempt 的 `agent/session.jsonl` 记录 SSH 作业的配置指纹、启动确认、轮询观察到的状态变化和退出码。`agent/trajectory.jsonl` 记录 Solver 的开始时间，以及成功下载并解析性能结果后的结束时间。中断时可结合 `agent/remote.log` 定位最后执行的阶段。请求时延和整组吞吐见 AISBench 性能产物。
+每档并发的 `cN/performance/agent/session.jsonl` 记录 SSH 作业的配置指纹、启动确认、轮询观察到的状态变化和退出码。同目录下的 `trajectory.jsonl` 记录 Solver 的开始时间，以及成功下载并解析性能结果后的结束时间。中断时可结合同目录下的 `remote.log` 定位最后执行的阶段。请求时延和整组吞吐见 AISBench 性能产物。
 
-远端 supervisor 独立于单次 SSH 连接，Evaluator 轮询阶段、心跳和增量日志。相同 run/task 续跑检查配置指纹，连接仍在运行的任务；远端已完成时重新下载。正常失败或已取消任务在新 attempt 中重启，旧产物归档到远端 history。`supervisor-lost` 不自动重启，需先确认远端是否仍有压测进程。
+远端 supervisor 独立于单次 SSH 连接，Evaluator 轮询阶段、心跳和增量日志。同一次执行重连时核对配置指纹。需要重新压测时启动一个新 run，各次测量分别保留。`supervisor-lost` 不自动重启，需先确认远端是否仍有压测进程。
 
 取消或超时会尝试终止对应远端进程组。SSH 不可用时无法确认取消，应检查日志和服务器；Evaluator 意外退出也可能留下远端任务。每项任务使用独立目录，不修改共享 AISBench 安装。
 

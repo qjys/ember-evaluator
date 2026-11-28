@@ -13,6 +13,7 @@ export type * from "./core/contracts/environment.js";
 export type * from "./core/contracts/image-cleanup.js";
 export type * from "./core/contracts/solver.js";
 export type * from "./core/contracts/metrics.js";
+export { measurementDirectory } from "./core/artifacts/artifacts.js";
 export type * from "./core/contracts/reporter.js";
 export type * from "./core/contracts/run-store.js";
 export type * from "./core/contracts/plugin-extension.js";

@@ -107,6 +107,12 @@ with tempfile.TemporaryDirectory(prefix="aisbench-remote-") as temp:
     assert call("start", "failed", config={**config,"model":"fail"}, restartToken="attempt-1")["state"] == "failed"
     assert call("start", "failed", config=config, restartToken="attempt-2")["state"] == "running"
     assert wait("failed")["state"] == "completed"
+    owned = root / "failed/generated-input"
+    owned.mkdir()
+    (owned / "dataset.jsonl").write_text("{}")
+    call("release-generated-input", "failed")
+    call("release-generated-input", "failed")
+    assert not owned.exists() and (root / "failed/artifacts").is_dir()
     call("start", "slow", config={**config,"model":"slow"})
     time.sleep(.3)
     assert call("cancel", "slow")["state"] == "cancelled"

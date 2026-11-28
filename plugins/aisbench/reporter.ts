@@ -69,6 +69,7 @@ export class AisbenchMarkdownReporter implements Reporter {
       incompleteCollection || diagnostics ? "性能测量已完成；存在诊断或证据收集不完整，请核对下方状态。" : "性能测量已完成。";
     const lines = ["# AISBench 性能报告", "", summary, "", `Run: ${escaped(snapshot.run.runId)} · Status: ${escaped(snapshot.run.status)}`, "", "## 运行概况", ""];
     const configuration = object(snapshot.run.configSummary);
+    if (snapshot.run.resultLayout) lines.push("[分类指标](metrics/index.json)", "");
     const selection = (key: string): JsonValue | undefined => {
       const value = configuration?.[key];
       return object(value)?.name ?? (typeof value === "string" ? value : undefined);

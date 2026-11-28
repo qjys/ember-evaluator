@@ -104,7 +104,7 @@ def multimodal_inputs(config, run):
                 tokenizer_path=config["tokenizerPath"],
                 gsm8k_path=generation.get("corpusPath", Path(__file__).parent / "upstream/GSM8K.jsonl"),
                 mmmu_parquet_dir=generation["mmmuParquetDir"], output_dir=directory,
-                scenarios=generation["imageScenario"], request_count=max(native["dataCount"]),
+                scenarios=generation["imageScenario"], request_count=config.get("generationCount", max(native["dataCount"])),
                 text_tokens=generation["textTokens"], output_tokens=generation.get("outputTokens", native["maxOutputTokens"]),
                 trust_remote_code=native.get("options", {}).get("trust-remote-code") is True,
             )

@@ -273,6 +273,8 @@ def dispatch(request):
     if action == "start":
         root.mkdir(parents=True, exist_ok=True, mode=0o700)
     if not root.exists():
+        if action == "release-generated-input":
+            return {}
         if action == "status":
             return status(root)
         raise ValueError("Job missing")
@@ -281,6 +283,15 @@ def dispatch(request):
         state_path = root / "state.json"
         if state_path.exists() and load(state_path)["fingerprint"] != request["fingerprint"]:
             raise ValueError("Job fingerprint differs")
+        if action == "release-generated-input":
+            if not state_path.exists():
+                return {}
+            if status(root)["state"] not in TERMINAL:
+                raise ValueError("Cannot release generated input for an active job")
+            target = root / "generated-input"
+            if target.exists():
+                shutil.rmtree(target)
+            return {}
         if action == "start" and state_path.exists():
             existing = load(state_path)
             token = request.get("restartToken")

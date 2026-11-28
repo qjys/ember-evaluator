@@ -19,7 +19,7 @@ export interface RunStore {
   allocate(key: AttemptKey): Promise<AttemptPaths>;
   listAttempts(): Promise<AttemptSummary[]>;
   currentTaskResult?(taskId: string): Promise<AttemptRecord | null>;
-  updateRun(patch: Partial<Pick<RunManifest, "status" | "finishedAt" | "durationMs" | "preparationRounds" | "source" | "taskIds" | "failure" | "initializationFailures">>): Promise<void>;
+  updateRun(patch: Partial<Pick<RunManifest, "status" | "finishedAt" | "durationMs" | "preparationRounds" | "source" | "taskIds" | "failure" | "initializationFailures">> & { measurementPoints?: Record<string, number | null> }): Promise<void>;
   commit(record: AttemptRecord, files: FileManifest): Promise<void>;
   /** Atomically admit only the currently allocated remote attempt; false keeps late evidence quarantined. */
   importAttempt?(record: AttemptRecord, files: FileManifest, sourceRoot: string): Promise<boolean>;

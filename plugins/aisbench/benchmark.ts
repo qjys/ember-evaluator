@@ -12,6 +12,7 @@ const sourceName = "github:rayn-zzz/aisbench_auto_tools_prefix";
 
 export class AisbenchBenchmark implements Benchmark {
   readonly evaluationKind = "performance";
+  readonly evaluationScenario = "inference-engine";
   readonly validateSourceOnCompletedResume = true;
   constructor(readonly config: AisbenchConfig) {}
 
@@ -33,7 +34,7 @@ export class AisbenchBenchmark implements Benchmark {
 
   async *enumerate(_source: SourceLock, signal: AbortSignal): AsyncIterable<TaskRef> {
     signal.throwIfAborted();
-    yield { id: this.id(), recordKey: this.config.workload };
+    yield { id: this.id(), recordKey: this.config.workload, measurementConcurrency: this.config.workload.concurrency };
   }
 
   async prepare(ref: TaskRef, source: SourceLock, signal: AbortSignal): Promise<PreparedTask> {

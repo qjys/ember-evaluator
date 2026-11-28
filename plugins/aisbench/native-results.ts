@@ -5,6 +5,8 @@ import { parseCsv } from "./ssh/csv.js";
 import { pointStatus, recordsByTask } from "./metrics.js";
 import { expectRecord } from "./validation.js";
 import { escaped } from "./reporter.js";
+import { aisbenchMeasurementFiles } from "./measurement-files.js";
+import { measurementDirectory } from "arsi-evaluator";
 import type { NativeConfig } from "./native-config.js";
 
 type Group = { model: string; dataset: string; concurrency: number | null; status: string; file: string | null;
@@ -91,6 +93,7 @@ export async function readNativeGroups(root: string, concurrency?: number[], exp
 }
 
 export class NativePerformanceMetrics implements Metrics {
+  readonly measurementFiles = aisbenchMeasurementFiles;
   readonly name = "aisbench-native-performance";
   async compute(snapshot: ResultSnapshot) {
     if (snapshot.run.evaluationKind !== "performance" || snapshot.run.source?.source !== "aisbench:native") return { applicable: false, points: [] };
@@ -129,15 +132,17 @@ export class NativeMarkdownReporter implements Reporter {
   async render(snapshot: ResultSnapshot) {
     const { points } = await new NativePerformanceMetrics().compute(snapshot);
     const lines = ["# AISBench 原生性能报告", "", `Run ${escaped(snapshot.run.runId)} · ${escaped(snapshot.run.status)}`, ""];
+    if (snapshot.run.resultLayout) lines.push("[分类指标](metrics/index.json)", "");
     for (const point of points) {
+      const root = snapshot.run.resultLayout ? measurementDirectory(snapshot.run.resultLayout.points[point.taskId]) + "/" : "";
       lines.push(`## ${escaped(point.taskId)} · ${escaped(point.status)}`, "");
       if (point.manifestPath) lines.push(`远端多模态数据清单 ${escaped(point.manifestPath)}`, "");
-      else if (!point.groups.length) lines.push("未取得可识别的原生性能测量。请查看本次 attempt 的日志和 outputs 目录。", "");
+      else if (!point.groups.length) lines.push("未取得可识别的原生性能测量。请查看该测量点的日志和 outputs 目录。", "");
       for (const value of point.groups) {
         const group = expectRecord(value, "native performance group");
         lines.push(`### ${escaped(String(group.model))} / ${escaped(String(group.dataset))}`, "",
           `状态 ${escaped(String(group.status))} · 配置并发 ${escaped(String(group.concurrency ?? "—"))}`, "");
-        if (typeof group.file === "string") lines.push(`原生文件 ${escaped(group.file)}`, "");
+        if (typeof group.file === "string") lines.push(`原生文件 ${escaped((root ? root + "performance/" : "") + group.file)}`, "");
         lines.push("| 原生指标 | 结果 |", "| --- | --- |");
         for (const [key, amounts] of Object.entries(expectRecord(group.totals, "native totals")))
           lines.push(`| ${escaped(key)} | ${escaped(JSON.stringify(amounts))} |`);
@@ -175,7 +180,7 @@ export class NativeMarkdownReporter implements Reporter {
           if (profile.traceDirectory) lines.push("服务端 trace 目录 " + escaped(String(profile.traceDirectory)), "");
           for (const raw of Array.isArray(profile.exports) ? profile.exports : []) {
             const rank = expectRecord(raw, "Ascend export");
-            lines.push("导出文件 " + escaped(String(rank.artifactDirectory)), "",
+            lines.push("导出文件 " + escaped(root + String(rank.artifactDirectory)), "",
               "| 设备证据 | 算子设备耗时 (µs) | 算子 Host 耗时 (µs) | Kernel 数 | Kernel 执行 (µs) | Kernel 等待 (µs) |",
               "| --- | ---: | ---: | ---: | ---: | ---: |",
               "| " + [rank.deviceEvidence, rank.operatorDeviceUs, rank.operatorHostUs, rank.kernelCount, rank.kernelDurationUs,

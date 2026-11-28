@@ -145,9 +145,9 @@ export type RunIdentity = {
 
 export type MeasurementLayout = {
   kind: "inference-engine";
-  version: 1;
-  /** Configured concurrency per public measurement ID. Selection may use a subset. */
-  points: Record<string, number>;
+  version: 1 | 2;
+  /** A v2 point may delegate its batch size to the native configuration (null). */
+  points: Record<string, number | null>;
   /** Category file stems requested by the benchmark, including failed captures. */
   requestedMetrics: string[];
 };

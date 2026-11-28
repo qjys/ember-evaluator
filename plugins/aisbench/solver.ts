@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, readFile, writeFile, appendFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile, appendFile, rename } from "node:fs/promises";
 import { join, posix } from "node:path";
 import { setTimeout } from "node:timers/promises";
 import { bindService, bindSolverService, fingerprintConfig, redactDiagnostic } from "arsi-evaluator";
@@ -16,7 +16,16 @@ import { parseNativeConfig } from "./native-config.js";
 import { readNativeGroups, readServiceCollections } from "./native-results.js";
 
 export class AisbenchSshSolver implements Solver {
+  private readonly generated = new Map<string, string>();
+  private readonly temporaryInputs = new Map<string, { client: AisbenchRemoteClient; fingerprint: string }>();
   constructor(private readonly config: AisbenchSshConfig, private readonly runtime: PluginFactoryContext) {}
+  async dispose(): Promise<void> {
+    for (const [job, { client, fingerprint }] of this.temporaryInputs) {
+      await client.call("release-generated-input", job, fingerprint, {}, AbortSignal.timeout(30000));
+      this.temporaryInputs.delete(job);
+    }
+    this.generated.clear();
+  }
   requirements() { return []; }
   async provenance() { return { bundleDigest: await bundleDigest(), aisbenchVersion: this.config.remote.aisbenchVersion }; }
   async solve(input: PublicTask, _session: EnvironmentSession, context: AttemptContext): Promise<SolveResult> {
@@ -51,8 +60,17 @@ export class AisbenchSshSolver implements Solver {
     const identity = createHash("sha256").update(JSON.stringify([context.key.runId, context.key.taskId])).digest("hex");
     const jobDir = posix.join(this.config.remote.workRoot, "jobs", identity);
     const workingDirectory = this.config.remote.workingDirectory ?? this.config.remote.aisbenchWorkPath;
+    const sharedCount = payload.sharedGenerationCount === undefined ? undefined : expectPositiveInteger(payload.sharedGenerationCount, "sharedGenerationCount");
+    let command = native;
+    const sharedManifest = this.generated.get(context.key.runId);
+    if (native?.multimodalGeneration && sharedCount) {
+      const { multimodalGeneration, ...rest } = native;
+      command = sharedManifest ? { ...rest, multimodalManifest: sharedManifest } : { ...rest, multimodalGeneration: {
+        ...multimodalGeneration, outputDirectory: multimodalGeneration.outputDirectory ?? posix.join(jobDir, "generated-input"),
+      } };
+    }
     const config = { ...(profileService ? { profileEndpoint: aisbenchBaseUrl(expectNonEmptyString(profileService.model.endpoint, "profiling endpoint")), profileApiKey } : {}),
-      ...(native ? { native, uploads,
+      ...(command ? { native: command, uploads, ...(sharedCount && !sharedManifest ? { generationCount: sharedCount } : {}),
       ...(workingDirectory ? { workingDirectory } : {}) } : { workload: workload ?? null }),
       ...(service ? { serviceEndpoint: service.model.endpoint, model: service.model.name, apiKey,
         endpoint: aisbenchBaseUrl(expectNonEmptyString(service.model.endpoint, "aisbench service endpoint")) } : {}),
@@ -61,7 +79,8 @@ export class AisbenchSshSolver implements Solver {
       aisbenchVersion: this.config.remote.aisbenchVersion, podInfo: this.config.podInfo };
     // Stable across credentials rotation and attempt retries; remote private config is never persisted locally.
     const fingerprint = fingerprintConfig({ ...config, apiKey: "", ...(profileService ? { profileApiKey: "" } : {}), bundleDigest: digest });
-    const root = join(context.paths.artifacts, "aisbench");
+    const point = context.paths.measurementPoint;
+    const root = point ? join(context.paths.root, "performance", ...(native ? [] : ["outputs"])) : join(context.paths.artifacts, "aisbench");
     await mkdir(root, { recursive: true });
     await writeFile(join(context.paths.agent, "remote-job.json"), JSON.stringify({ jobDir, fingerprint, bundleDigest: digest }) + "\n");
     const session = join(context.paths.agent, "session.jsonl");
@@ -87,6 +106,8 @@ export class AisbenchSshSolver implements Solver {
     try {
       context.activity?.({ message: "AISBench: deploying remote runner" });
       await client.deploy(context.signal);
+      if (sharedCount && !sharedManifest && !native?.multimodalGeneration?.outputDirectory)
+        this.temporaryInputs.set(jobDir, { client, fingerprint });
       let status = await readStatus(0, context.signal);
       if (["missing", "failed", "cancelled"].includes(status.state)) {
         started = true; // start response can be lost; cancellation must still find the job.
@@ -112,6 +133,8 @@ export class AisbenchSshSolver implements Solver {
           const plan = expectRecord(JSON.parse(await readFile(join(root, "native-plan.json"), "utf8")), "AISBench native plan");
           const summary = expectRecord(plan.multimodalGeneration, "multimodal manifest summary");
           const count = expectPositiveInteger(summary.requests, "manifest requests");
+          if (sharedCount && !sharedManifest) this.generated.set(context.key.runId,
+            expectNonEmptyString(summary.manifestPath, "shared generated manifest"));
           if (dataOnly) {
             if (plan.multimodalAction !== action) throw new Error("Unexpected multimodal operation in remote evidence");
             datasetOperation = { action, manifestPath: expectNonEmptyString(summary.manifestPath, "manifestPath"),
@@ -119,6 +142,8 @@ export class AisbenchSshSolver implements Solver {
           } else if (!native.pressureSeconds && !native.options?.pressure) expectedRequests = native.dataCount ?? count;
         }
         const groups = dataOnly ? [] : await readNativeGroups(root, native.concurrency, expectedRequests);
+        if (native.concurrency && groups.some(group => group.concurrency !== null && !native.concurrency?.includes(group.concurrency)))
+          throw new Error("Native AISBench reported a concurrency outside the selected measurement point");
         const collections = native.engineMetrics || native.profiling
           ? await readServiceCollections(root, native) : undefined;
         const observations = { kind: "aisbench-native", schemaVersion: 1, taskId: input.id, taskDigest: fingerprintConfig(payload),
@@ -150,6 +175,12 @@ export class AisbenchSshSolver implements Solver {
         catch { await log("\nRemote artifact collection incomplete; remote job retained for recovery.\n"); }
       }
       throw error;
+    } finally {
+      if (point && native?.profiling) {
+        await rename(join(root, "profiling"), join(context.paths.root, "profiling")).catch(error => {
+          if (error.code !== "ENOENT") throw error;
+        });
+      }
     }
   }
 }

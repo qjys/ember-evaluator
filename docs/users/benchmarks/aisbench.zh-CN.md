@@ -55,7 +55,7 @@ benchmark:
 
 `single_1080p` 每条请求带一张 1920×1080 原图。`multi_720p_5` 每条带五份相同的 1280×720 原图。生成器按 `benchmark.solver.config.tokenizerPath` 将每条请求的文本调整为指定 token 数；图像和对话模板占用的 token 另计。默认文本语料使用随 Evaluator 分发的 GSM8K。可用 `multimodalGeneration.corpusPath` 指向压测机上的兼容 JSONL，其中需有足够多的不同问题。`maxOutputTokens` 为输出上限，生成模式默认 256。
 
-上述实验产生四组结果。每种图片规格在每档并发各发 16 条正式请求，共 64 条。各组使用相同文本，报告按规格和并发展示吞吐与时延。流式请求可测首 token 时延（TTFT）、每个输出 token 耗时（TPOT）及相邻 token 时延（ITL）。`imageScenario` 也接受单值，省略时使用单图 1080p。`dataCount: [4, 16]` 表示每种规格准备 16 条，并发 1 使用前 4 条，并发 8 使用全部 16 条。制数摘要保存在 `artifacts/aisbench/native-plan.json` 的 `multimodalGeneration.datasets`。[官方生成器说明](https://github.com/AISBench/benchmark/blob/7ace6948a3a2726578aed869db0d5885ace11d55/plugins/prefix_cache/MULTIMODAL.md)
+上述实验产生四组结果。每种图片规格在每档并发各发 16 条正式请求，共 64 条。各组使用相同文本，报告按规格和并发展示吞吐与时延。流式请求可测首 token 时延（TTFT）、每个输出 token 耗时（TPOT）及相邻 token 时延（ITL）。`imageScenario` 也接受单值，省略时使用单图 1080p。`dataCount: [4, 16]` 表示每种规格准备 16 条，并发 1 使用前 4 条，并发 8 使用全部 16 条。制数摘要保存在每档的 `performance/native-plan.json` 的 `multimodalGeneration.datasets`。[官方生成器说明](https://github.com/AISBench/benchmark/blob/7ace6948a3a2726578aed869db0d5885ace11d55/plugins/prefix_cache/MULTIMODAL.md)
 
 需要分别控制样本记录的输出长度和模型后端的输出上限时，在 `multimodalGeneration` 中填 `outputTokens`，在外层填 `maxOutputTokens`。只填其中一个会为两者使用同一数值。
 
@@ -117,11 +117,11 @@ Solver 使用 `aisbench-ssh`。其中 `tokenizerPath` 映射到 `--path`。省�
 
 已有完整原生配置时，可用 `configFile: ./bench/run.py` 及可选 `files: [./bench/helper.py]`，或用 `remoteConfigFile: /bench/run.py` 替代 `backend` 和 `datasets`。配置文件自行定义模型和服务，可读环境变量 `EVALUATOR_AISBENCH_MODEL`、`EVALUATOR_AISBENCH_BASE_URL`、`EVALUATOR_AISBENCH_API_KEY`。本地 Python 文件按摘要核对并上传，数据与模型在远端准备。
 
-`run --dry-run` 在本地校验并列出任务。正式运行时检查远端版本，原生参数和数据集须由该版本支持。脱敏调用见 attempt 下 `artifacts/aisbench/native-plan.json`，文本产物在同目录的 `outputs/`，跳过的私有配置或不支持格式见 `collection.json`。报告按原生模型和数据集分组，保留请求数、吞吐和已有时延分位数的单位。缺组、请求失败或无法识别的结果在报告中单独标出。
+`run --dry-run` 在本地校验并列出任务。正式运行时检查远端版本，原生参数和数据集须由该版本支持。脱敏调用见 `cN/performance/native-plan.json`。并发由原生配置决定时，产物放在 `configured/` 下。仅制数或校验数据时使用原有的任务和 attempt 目录。对压测作业，文本产物在同目录的 `outputs/`，跳过的私有配置或不支持格式见 `collection.json`。报告按原生模型和数据集分组，保留请求数、吞吐和已有时延分位数的单位。缺组、请求失败或无法识别的结果在报告中单独标出。
 
 ## 一次运行采集推理性能和 Ascend profiling
 
-[TextVQA 双轮示例](../../../plugins/aisbench/playbook/04-service-profiling.yaml)使用同一服务先跑完并发 1、8 的正式压测，再依次采两档 trace。正式结果仍包括吞吐、请求时延和流式首 token 时延。图片和请求由 AISBench 发送；生成式多模态输入在同一作业内只制数一次。填写服务、SSH 和共享目录后运行：
+[TextVQA 双轮示例](../../../plugins/aisbench/playbook/04-service-profiling.yaml)在并发 1 完成正式压测和诊断后，再对并发 8 执行同样的两轮。正式结果仍包括吞吐、请求时延和流式首 token 时延。图片和请求由 AISBench 发送；生成式多模态输入在同一次测评中生成一次，由各档共用。填写服务、SSH 和共享目录后运行：
 
 ```bash
 arsi-evaluator run plugins/aisbench/playbook/04-service-profiling.yaml
@@ -139,4 +139,4 @@ arsi-evaluator run plugins/aisbench/playbook/04-service-profiling.yaml
 
 这些选项适用于 `scenario: native` 下由 evaluator 绑定服务的 `backend` + `datasets`、`multimodalGeneration` 或 `multimodalManifest`。独立 Python 配置文件自行选择服务。一个诊断窗口覆盖一档并发的一次 AISBench 命令，包含命令启动、请求和汇总；若命令同时选择多个原生数据集，trace 覆盖它们的合计负载。各个生成图片规格有独立窗口。
 
-在 `report.md` 查看正式压测和每档服务端读数。在 `metrics.json` 的 `aisbench-native-performance` 中，`groups` 保存普通压测结果，`collections` 保存引擎快照及每个 rank 的算子、Kernel、阶段耗时和 Top 算子。完整原始导出留在共享目录，用于解析的 CSV/JSON 随 attempt 保存在 `artifacts/aisbench/profiling/point-*/trace/`。诊断请求不会计入正式吞吐。正式请求不完整时跳过 profiling，只有 Host 数据时标为 `host-only`，接口或导出失败时记录错误并保留已取得的普通性能数据。
+在 `report.md` 查看正式压测和每档服务端读数。`metrics/index.json` 列出可读分类。请求结果见 `service/requests.json`，引擎快照见 `engine/engine.json`，各 rank 的算子和阶段时间分别见 `execution/operators.json` 和 `parallelism/timeline.json`。这些路径均相对 `metrics/`。完整原始导出留在共享目录，用于解析的 CSV/JSON 按并发保存在 `cN/profiling/point-*/trace/`。诊断请求不会计入正式吞吐。正式请求不完整时跳过 profiling，只有 Host 数据时标为 `host-only`，接口或导出失败时记录错误并保留已取得的普通性能数据。

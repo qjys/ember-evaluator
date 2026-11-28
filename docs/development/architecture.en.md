@@ -60,7 +60,7 @@ CLI `run` and SDK `Evaluator.run()` use `executeExperiment` in [application/run.
 
 A task can declare `artifactDirectory` to publish a same-named workspace directory under `<name>/outputs/` once the solve environment is quiescent. The attempt inventories individual files across steps. Failure and cancellation use the same evidence recovery path.
 
-A benchmark can declare the versioned inference-engine layout through `resultLayout()`. The store publishes each concurrency point once under `cN/`. Metric plugins expose category files through `measurementFiles()`; the store publishes those files, the report and `metrics/index.json`. Offline readers select the layout from the manifest. Historical runs use the task and attempt paths.
+The framework selects the result layout by evaluation scenario. Inference service workloads identify their scenario as `inference-engine` and expose `measurementConcurrency` on each enumerated TaskRef. The framework locks the selected points and source together in the manifest. AgentX and AISBench share one `cN/` directory per concurrency. A null concurrency delegates batching to the native configuration and uses `configured/`. Metric plugins publish category files through `measurementFiles()`. GSM8K, operator benchmarks and data preparation use the task layout. Offline readers honor the layout in the saved run manifest.
 
 `createRunComponents` and `createBenchmark` require an existing registry and never open or close it. The former returns `RunComponents` without `dispose()`; the latter returns a Benchmark directly. The registry owns factory resources, including resources allocated before an assembly failure, and its owner closes it in `finally`.
 

@@ -28,6 +28,7 @@ import type { SourceLock } from "../contracts/task.js";
 import { attemptStatus, attemptTimeoutKind, evaluationScore, hasUnconfirmedCleanup, isAgentTimeout, isEvaluationComplete } from "../results/evaluation-outcome.js";
 import { formatError, redactDiagnostic } from "../errors/diagnostics.js";
 import { classifyError, failureMessage } from "../errors/classify.js";
+import { scenarioLayout, selectedMeasurementPoints } from "../results/scenario-layout.js";
 import { requiresDispatchStop } from "../policies/error-policy.js";
 import { EvaluatorError } from "../errors/evaluator-error.js";
 
@@ -203,10 +204,11 @@ export async function executeEngine({
         typeof value === "string" && bound.auth.value ? value.replaceAll(bound.auth.value, "[redacted]") : value,
     ),
   );
+  const resultLayout = previous ? previous.resultLayout : scenarioLayout(components.benchmark, experiment);
   const manifest: RunManifest = previous ?? {
     schemaVersion: 1,
     evaluationKind: components.benchmark.evaluationKind ?? "quality",
-    ...(components.benchmark.resultLayout ? { resultLayout: components.benchmark.resultLayout(experiment) } : {}),
+    ...(resultLayout ? { resultLayout } : {}),
     ...(batchPreparation ? { executionVersion: 2 as const } : {}),
     runId: runId ?? randomUUID(),
     source: null,
@@ -250,7 +252,10 @@ export async function executeEngine({
     if (previous?.source && fingerprintConfig(selected.map(ref => ref.id)) !== fingerprintConfig(previous.taskIds))
       throw new ResumeError("SOURCE_CHANGED", "Resume source enumeration differs from the locked task selection");
     if (!manifest.source) {
-      await components.store.updateRun({ source, taskIds: selected.map(ref => ref.id), failure: null });
+      const measurementPoints = selectedMeasurementPoints(manifest.resultLayout, selected);
+      await components.store.updateRun({ source, taskIds: selected.map(ref => ref.id), failure: null,
+        ...(measurementPoints ? { measurementPoints } : {}) });
+      if (manifest.resultLayout && measurementPoints) manifest.resultLayout.points = measurementPoints;
       manifest.source = source; manifest.taskIds = selected.map(ref => ref.id);
     } else await components.store.updateRun({ failure: null });
   } catch (error) {

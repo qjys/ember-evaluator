@@ -232,7 +232,7 @@ test("device coverage stays partial when only one of two ranks supplies HBM", as
     categories: { hbmBandwidth: { status: "partial", observed: 1, expected: 2, reason: "missing rank 1" } },
     exports: [{ artifactDirectory: "trace/rank0", native: { hbmChannels: [{ meanMBps: 351 }] },
       artifacts: { outputs: ["ascend_pytorch_profiler_0.db"] } }] } }] };
-  const file = new AgentXPerformanceMetrics().measurementFiles(snapshot, { points: [point] }).find(f => f.path === "hardware/hbm");
+  const file = new AgentXPerformanceMetrics().measurementFiles(snapshot, { applicable: true, points: [point] }).find(f => f.path === "hardware/hbm");
   expect(file).toMatchObject({ status: { c1: "partial" }, points: [{ profiling: { status: "partial", values: {
     coverage: { hbmBandwidth: { expected: 2, observed: 1 } }, ranks: [{ files: ["c1/profiling/trace/rank0/ascend_pytorch_profiler_0.db"],
       statistics: { hbmChannels: [{ meanMBps: 351 }] } }] } } }] });

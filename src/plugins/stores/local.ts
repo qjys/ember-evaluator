@@ -22,7 +22,7 @@ import type {
 import type { JsonValue } from "../../core/contracts/task.js";
 import type { MeasurementMetricFile, MetricResults } from "../../core/contracts/metrics.js";
 import { fingerprintConfig } from "../../core/results/run-manifest.js";
-import { checkedPath, resultDirectory, safeTaskKey, verifyFileManifest } from "../../core/artifacts/artifacts.js";
+import { checkedPath, measurementDirectory, resultDirectory, safeTaskKey, verifyFileManifest } from "../../core/artifacts/artifacts.js";
 import { assertAttemptRecord, trajectoryType } from "../../core/results/record-validation.js";
 import { inspectReportPair } from "./report-state.js";
 import { selectAttemptRecords } from "../../core/results/task-result-resolver.js";
@@ -95,12 +95,12 @@ function validateRun(run: RunManifest): void {
     if (!["quality", "performance"].includes(run.evaluationKind)) throw new TypeError("Invalid evaluation kind");
     const layout = run.resultLayout;
     if (layout !== undefined) {
-      if (layout.kind !== "inference-engine" || layout.version !== 1 || run.evaluationKind !== "performance" ||
+      if (layout.kind !== "inference-engine" || ![1, 2].includes(layout.version) || run.evaluationKind !== "performance" ||
           !layout.points || Array.isArray(layout.points) || typeof layout.points !== "object" ||
           !Array.isArray(layout.requestedMetrics) || layout.requestedMetrics.some(name => !/^[a-z]+\/[a-z]+$/u.test(name)))
         throw new TypeError("Invalid measurement layout");
       const points = Object.values(layout.points);
-      if (points.some(c => !Number.isSafeInteger(c) || c < 1) || new Set(points).size !== points.length ||
+      if (points.some(c => c === null ? layout.version !== 2 : !Number.isSafeInteger(c) || c < 1) || new Set(points).size !== points.length ||
           run.taskIds.some(id => !Object.hasOwn(layout.points, id))) throw new TypeError("Invalid measurement points");
     }
     if (run.source !== null) assertSourceLock(run.source);
@@ -383,7 +383,7 @@ export class LocalRunStore implements RunStore {
     const summaries: AttemptSummary[] = [];
     for (const taskId of taskIds ?? run.taskIds) {
       if (run.resultLayout) {
-        const name = `c${run.resultLayout.points[taskId]}`;
+        const name = measurementDirectory(run.resultLayout.points[taskId]);
         if (!await exists(join(directory, name))) continue;
         const root = await checkedPath(directory, name);
         const saved = await json<AttemptSummary>(await checkedPath(root, "measurement.json"));
@@ -449,7 +449,7 @@ export class LocalRunStore implements RunStore {
     return this.readAttempts();
   }
 
-  async updateRun(patch: Partial<Pick<RunManifest, "status" | "finishedAt" | "durationMs" | "preparationRounds" | "source" | "taskIds" | "failure" | "initializationFailures">>): Promise<void> {
+  async updateRun({ measurementPoints, ...patch }: Parameters<RunStore["updateRun"]>[0]): Promise<void> {
     return this.write(async () => {
       const { directory, run } = this.active();
       if (Object.keys(patch).some(key => !["status", "finishedAt", "durationMs", "preparationRounds", "source", "taskIds", "failure", "initializationFailures"].includes(key)))
@@ -459,6 +459,12 @@ export class LocalRunStore implements RunStore {
       if ((patch.source !== undefined) !== (patch.taskIds !== undefined))
         throw new StoreError("STORE_RECORD_INVALID", "Source and task selection must be admitted together");
       const next = { ...run, ...patch };
+      if (measurementPoints !== undefined) {
+        if (!run.resultLayout || !patch.source || !patch.taskIds || Object.keys(run.resultLayout.points).length ||
+            Object.keys(measurementPoints).length !== patch.taskIds.length)
+          throw new StoreError("STORE_RECORD_INVALID", "Measurement points must be locked with the initial selection");
+        next.resultLayout = { ...run.resultLayout, points: structuredClone(measurementPoints) };
+      }
       validateRun(next);
       await atomicWrite(join(directory, "manifest.json"), serialized(next));
       this.run = next;
@@ -670,7 +676,11 @@ export class LocalRunStore implements RunStore {
         for (const name of names) {
           if (!/^[a-z]+\/[a-z]+$/u.test(name)) throw new StoreError("REPORT_FAILED", "Invalid metric category path");
           const file = files.get(name);
-          if (!file) continue;
+          if (!file) {
+            index[name] = { path: null, status: Object.fromEntries(run.taskIds.map(id =>
+              [measurementDirectory(run.resultLayout!.points[id]), "unavailable"])) };
+            continue;
+          }
           if (!file.points.length) {
             index[name] = { status: file.status, path: null };
             continue;

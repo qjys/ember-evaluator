@@ -72,6 +72,7 @@ export function parseAgentXConfig(value: unknown): AgentXConfig {
 
 export class AgentXBenchmark implements Benchmark {
   readonly evaluationKind = "performance";
+  readonly evaluationScenario = "inference-engine";
   readonly validateSourceOnCompletedResume = true;
   private readonly source: DatasetRecordSource;
   private readonly cache: DatasetCache;
@@ -86,9 +87,8 @@ export class AgentXBenchmark implements Benchmark {
       : new LocalRecordSource(config.localPath, definition));
   }
 
-  resultLayout(config: EffectiveConfig): import("../../../../core/contracts/result.js").MeasurementLayout {
+  requestedMeasurements(config: EffectiveConfig): string[] {
     const formal = this.config.measurementMode !== "profiling";
-    const points = Object.fromEntries(this.config.concurrency.map(c => [this.id(c) + (formal ? "" : "-profiling"), c]));
     const telemetry = config.solver.config.telemetry === undefined ? {} : parseTelemetryConfig(config.solver.config.telemetry, config.hardware);
     const requested = new Set<string>();
     if (formal) requested.add("service/requests");
@@ -103,7 +103,7 @@ export class AgentXBenchmark implements Benchmark {
         if (preset === "full" || profile.nodeMetrics) requested.add("resource/host");
       } else requested.add({ compute: "hardware/pmu", bandwidth: "hardware/hbm", cache: "hardware/cache" }[preset]);
     }
-    return { kind: "inference-engine", version: 1, points, requestedMetrics: [...requested] };
+    return [...requested];
   }
 
   validateRun(config: EffectiveConfig): void {
@@ -141,7 +141,7 @@ export class AgentXBenchmark implements Benchmark {
     for (const concurrency of this.config.concurrency) {
       signal.throwIfAborted();
       const id = this.id(concurrency) + (this.config.measurementMode === "profiling" ? "-profiling" : "");
-      yield { id, recordKey: { concurrency } };
+      yield { id, recordKey: { concurrency }, measurementConcurrency: concurrency };
     }
   }
 
