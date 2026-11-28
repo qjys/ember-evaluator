@@ -1,0 +1,640 @@
+{
+  "benchmark": "OfficeQA Pro V2",
+  "datasetRevision": "65a2b315780417bc50d7bfe6e5bdb904e63fda65",
+  "model": "MiniMax-M3.1-Flash",
+  "reasoningEffort": "low",
+  "solver": "MiniMax Code",
+  "source": "historical-chart-snapshot",
+  "results": [
+    {
+      "taskId": "0",
+      "score": 1,
+      "solveDurationMs": 320167.620419,
+      "solveTimedOut": false,
+      "totalTokens": 625160
+    },
+    {
+      "taskId": "1",
+      "score": 1,
+      "solveDurationMs": 96453.30066500002,
+      "solveTimedOut": false,
+      "totalTokens": 377003
+    },
+    {
+      "taskId": "2",
+      "score": 1,
+      "solveDurationMs": 147805.81543999998,
+      "solveTimedOut": false,
+      "totalTokens": 1776729
+    },
+    {
+      "taskId": "3",
+      "score": 0,
+      "solveDurationMs": 88119.21174700011,
+      "solveTimedOut": false,
+      "totalTokens": 753866
+    },
+    {
+      "taskId": "4",
+      "score": 1,
+      "solveDurationMs": 32414.910834999988,
+      "solveTimedOut": false,
+      "totalTokens": 144612
+    },
+    {
+      "taskId": "5",
+      "score": 1,
+      "solveDurationMs": 79570.08552900003,
+      "solveTimedOut": false,
+      "totalTokens": 696190
+    },
+    {
+      "taskId": "6",
+      "score": 1,
+      "solveDurationMs": 190604.55590799998,
+      "solveTimedOut": false,
+      "totalTokens": 2030109
+    },
+    {
+      "taskId": "7",
+      "score": 1,
+      "solveDurationMs": 24938.245417000027,
+      "solveTimedOut": false,
+      "totalTokens": 254637
+    },
+    {
+      "taskId": "8",
+      "score": 0,
+      "solveDurationMs": 39316.01214899984,
+      "solveTimedOut": false,
+      "totalTokens": 245821
+    },
+    {
+      "taskId": "9",
+      "score": 1,
+      "solveDurationMs": 23762.053469999926,
+      "solveTimedOut": false,
+      "totalTokens": 218987
+    },
+    {
+      "taskId": "10",
+      "score": 1,
+      "solveDurationMs": 121892.38097399985,
+      "solveTimedOut": false,
+      "totalTokens": 941411
+    },
+    {
+      "taskId": "11",
+      "score": 1,
+      "solveDurationMs": 343760.098125,
+      "solveTimedOut": false,
+      "totalTokens": 3949069
+    },
+    {
+      "taskId": "12",
+      "score": 0,
+      "solveDurationMs": 62552.94450099999,
+      "solveTimedOut": false,
+      "totalTokens": 484244
+    },
+    {
+      "taskId": "13",
+      "score": 1,
+      "solveDurationMs": 226946.53602999984,
+      "solveTimedOut": false,
+      "totalTokens": 2511012
+    },
+    {
+      "taskId": "14",
+      "score": 1,
+      "solveDurationMs": 16071.450789999915,
+      "solveTimedOut": false,
+      "totalTokens": 111080
+    },
+    {
+      "taskId": "15",
+      "score": 1,
+      "solveDurationMs": 266370.467037,
+      "solveTimedOut": false,
+      "totalTokens": 1222534
+    },
+    {
+      "taskId": "16",
+      "score": 1,
+      "solveDurationMs": 734935.8884,
+      "solveTimedOut": false,
+      "totalTokens": 4388295
+    },
+    {
+      "taskId": "17",
+      "score": 1,
+      "solveDurationMs": 405288.4079089998,
+      "solveTimedOut": false,
+      "totalTokens": 2068198
+    },
+    {
+      "taskId": "18",
+      "score": 1,
+      "solveDurationMs": 69783.2909690002,
+      "solveTimedOut": false,
+      "totalTokens": 687115
+    },
+    {
+      "taskId": "19",
+      "score": 0,
+      "solveDurationMs": 100258.49563900009,
+      "solveTimedOut": false,
+      "totalTokens": 746813
+    },
+    {
+      "taskId": "20",
+      "score": 1,
+      "solveDurationMs": 935206.4554829998,
+      "solveTimedOut": false,
+      "totalTokens": 8016800
+    },
+    {
+      "taskId": "21",
+      "score": 1,
+      "solveDurationMs": 1257608.5488480004,
+      "solveTimedOut": false,
+      "totalTokens": 11982933
+    },
+    {
+      "taskId": "22",
+      "score": 1,
+      "solveDurationMs": 82214.34190899972,
+      "solveTimedOut": false,
+      "totalTokens": 732876
+    },
+    {
+      "taskId": "23",
+      "score": 1,
+      "solveDurationMs": 772980.2873719996,
+      "solveTimedOut": false,
+      "totalTokens": 4929669
+    },
+    {
+      "taskId": "24",
+      "score": 0,
+      "solveDurationMs": 568164.5492949998,
+      "solveTimedOut": false,
+      "totalTokens": 1748930
+    },
+    {
+      "taskId": "25",
+      "score": 1,
+      "solveDurationMs": 392048.3264120007,
+      "solveTimedOut": false,
+      "totalTokens": 2591187
+    },
+    {
+      "taskId": "26",
+      "score": 0,
+      "solveDurationMs": 318518.8382110009,
+      "solveTimedOut": false,
+      "totalTokens": 3324611
+    },
+    {
+      "taskId": "27",
+      "score": 1,
+      "solveDurationMs": 311348.68412000034,
+      "solveTimedOut": false,
+      "totalTokens": 4567104
+    },
+    {
+      "taskId": "28",
+      "score": 0,
+      "solveDurationMs": 565535.9050289998,
+      "solveTimedOut": false,
+      "totalTokens": 5316960
+    },
+    {
+      "taskId": "29",
+      "score": 0,
+      "solveDurationMs": 1524603.9520419985,
+      "solveTimedOut": false,
+      "totalTokens": 10220127
+    },
+    {
+      "taskId": "30",
+      "score": 0,
+      "solveDurationMs": 175338.29704399966,
+      "solveTimedOut": false,
+      "totalTokens": 836704
+    },
+    {
+      "taskId": "31",
+      "score": 1,
+      "solveDurationMs": 68831.99283700064,
+      "solveTimedOut": false,
+      "totalTokens": 256511
+    },
+    {
+      "taskId": "32",
+      "score": 1,
+      "solveDurationMs": 149631.27640900016,
+      "solveTimedOut": false,
+      "totalTokens": 778706
+    },
+    {
+      "taskId": "33",
+      "score": 1,
+      "solveDurationMs": 275666.391884001,
+      "solveTimedOut": false,
+      "totalTokens": 2378006
+    },
+    {
+      "taskId": "34",
+      "score": 0,
+      "solveDurationMs": 224644.86697500013,
+      "solveTimedOut": false,
+      "totalTokens": 2803732
+    },
+    {
+      "taskId": "35",
+      "score": 1,
+      "solveDurationMs": 108645.62239300087,
+      "solveTimedOut": false,
+      "totalTokens": 991560
+    },
+    {
+      "taskId": "36",
+      "score": 0,
+      "solveDurationMs": 324724.031878,
+      "solveTimedOut": false,
+      "totalTokens": 3024920
+    },
+    {
+      "taskId": "37",
+      "score": 1,
+      "solveDurationMs": 70086.61506700004,
+      "solveTimedOut": false,
+      "totalTokens": 723072
+    },
+    {
+      "taskId": "38",
+      "score": 0,
+      "solveDurationMs": 366085.04003100004,
+      "solveTimedOut": false,
+      "totalTokens": 3773405
+    },
+    {
+      "taskId": "39",
+      "score": 0,
+      "solveDurationMs": 220716.20767499995,
+      "solveTimedOut": false,
+      "totalTokens": 1312264
+    },
+    {
+      "taskId": "40",
+      "score": 0,
+      "solveDurationMs": 131997.89768599998,
+      "solveTimedOut": false,
+      "totalTokens": 360121
+    },
+    {
+      "taskId": "41",
+      "score": 1,
+      "solveDurationMs": 175968.01162499993,
+      "solveTimedOut": false,
+      "totalTokens": 1926935
+    },
+    {
+      "taskId": "42",
+      "score": 1,
+      "solveDurationMs": 132370.72979300003,
+      "solveTimedOut": false,
+      "totalTokens": 1172882
+    },
+    {
+      "taskId": "43",
+      "score": 0,
+      "solveDurationMs": 421468.78524600016,
+      "solveTimedOut": false,
+      "totalTokens": 895522
+    },
+    {
+      "taskId": "44",
+      "score": 1,
+      "solveDurationMs": 136528.51067800005,
+      "solveTimedOut": false,
+      "totalTokens": 879919
+    },
+    {
+      "taskId": "45",
+      "score": 0,
+      "solveDurationMs": 2302258.5185310002,
+      "solveTimedOut": false,
+      "totalTokens": 7572699
+    },
+    {
+      "taskId": "46",
+      "score": 1,
+      "solveDurationMs": 1526669.3338469998,
+      "solveTimedOut": false,
+      "totalTokens": 5627800
+    },
+    {
+      "taskId": "47",
+      "score": 0,
+      "solveDurationMs": 291374.9719329998,
+      "solveTimedOut": false,
+      "totalTokens": 2584748
+    },
+    {
+      "taskId": "48",
+      "score": 1,
+      "solveDurationMs": 192285.47012099996,
+      "solveTimedOut": false,
+      "totalTokens": 1008753
+    },
+    {
+      "taskId": "49",
+      "score": 0,
+      "solveDurationMs": 95811.22745000012,
+      "solveTimedOut": false,
+      "totalTokens": 780694
+    },
+    {
+      "taskId": "50",
+      "score": 0,
+      "solveDurationMs": 537062.3942630002,
+      "solveTimedOut": false,
+      "totalTokens": 2787587
+    },
+    {
+      "taskId": "51",
+      "score": 0,
+      "solveDurationMs": 1336069.0561449993,
+      "solveTimedOut": false,
+      "totalTokens": 8480911
+    },
+    {
+      "taskId": "52",
+      "score": 0,
+      "solveDurationMs": 237785.91726899985,
+      "solveTimedOut": false,
+      "totalTokens": 1768142
+    },
+    {
+      "taskId": "53",
+      "score": 1,
+      "solveDurationMs": 611837.9692569999,
+      "solveTimedOut": false,
+      "totalTokens": 5270576
+    },
+    {
+      "taskId": "54",
+      "score": 1,
+      "solveDurationMs": 544487.7156339996,
+      "solveTimedOut": false,
+      "totalTokens": 3278266
+    },
+    {
+      "taskId": "55",
+      "score": 1,
+      "solveDurationMs": 77678.75609200075,
+      "solveTimedOut": false,
+      "totalTokens": 456815
+    },
+    {
+      "taskId": "56",
+      "score": 1,
+      "solveDurationMs": 1431858.1731479988,
+      "solveTimedOut": false,
+      "totalTokens": 7822866
+    },
+    {
+      "taskId": "57",
+      "score": 0,
+      "solveDurationMs": 692280.2831679992,
+      "solveTimedOut": false,
+      "totalTokens": 1700566
+    },
+    {
+      "taskId": "58",
+      "score": 1,
+      "solveDurationMs": 883838.6703919992,
+      "solveTimedOut": false,
+      "totalTokens": 2146124
+    },
+    {
+      "taskId": "59",
+      "score": 0,
+      "solveDurationMs": 300254.2985810004,
+      "solveTimedOut": false,
+      "totalTokens": 966081
+    },
+    {
+      "taskId": "60",
+      "score": 1,
+      "solveDurationMs": 1243953.6019750014,
+      "solveTimedOut": false,
+      "totalTokens": 5125275
+    },
+    {
+      "taskId": "61",
+      "score": 0,
+      "solveDurationMs": 828047.8615799993,
+      "solveTimedOut": false,
+      "totalTokens": 3392636
+    },
+    {
+      "taskId": "62",
+      "score": 0,
+      "solveDurationMs": 400099.2162849996,
+      "solveTimedOut": false,
+      "totalTokens": 5315713
+    },
+    {
+      "taskId": "63",
+      "score": 1,
+      "solveDurationMs": 388587.7759890016,
+      "solveTimedOut": false,
+      "totalTokens": 3306592
+    },
+    {
+      "taskId": "64",
+      "score": 1,
+      "solveDurationMs": 105591.87006999925,
+      "solveTimedOut": false,
+      "totalTokens": 949257
+    },
+    {
+      "taskId": "65",
+      "score": 0,
+      "solveDurationMs": 181419.73287099972,
+      "solveTimedOut": false,
+      "totalTokens": 1117682
+    },
+    {
+      "taskId": "66",
+      "score": 0,
+      "solveDurationMs": 168724.32947999984,
+      "solveTimedOut": false,
+      "totalTokens": 1034727
+    },
+    {
+      "taskId": "67",
+      "score": 0,
+      "solveDurationMs": 471156.9616119992,
+      "solveTimedOut": false,
+      "totalTokens": 2717030
+    },
+    {
+      "taskId": "68",
+      "score": 0,
+      "solveDurationMs": 388592.15120299906,
+      "solveTimedOut": false,
+      "totalTokens": 1269149
+    },
+    {
+      "taskId": "69",
+      "score": 0,
+      "solveDurationMs": 200172.45417499915,
+      "solveTimedOut": false,
+      "totalTokens": 1422103
+    },
+    {
+      "taskId": "70",
+      "score": 1,
+      "solveDurationMs": 467734.388739001,
+      "solveTimedOut": false,
+      "totalTokens": 1930046
+    },
+    {
+      "taskId": "71",
+      "score": 1,
+      "solveDurationMs": 164325.70983400196,
+      "solveTimedOut": false,
+      "totalTokens": 1216330
+    },
+    {
+      "taskId": "72",
+      "score": 0,
+      "solveDurationMs": 548199.164648,
+      "solveTimedOut": false,
+      "totalTokens": 4943031
+    },
+    {
+      "taskId": "73",
+      "score": 1,
+      "solveDurationMs": 455906.58998700004,
+      "solveTimedOut": false,
+      "totalTokens": 1688610
+    },
+    {
+      "taskId": "74",
+      "score": 1,
+      "solveDurationMs": 540818.351797,
+      "solveTimedOut": false,
+      "totalTokens": 4696442
+    },
+    {
+      "taskId": "75",
+      "score": 0,
+      "solveDurationMs": 980172.6790249997,
+      "solveTimedOut": false,
+      "totalTokens": 7019585
+    },
+    {
+      "taskId": "76",
+      "score": 0,
+      "solveDurationMs": 22910.432122999802,
+      "solveTimedOut": false,
+      "totalTokens": 172359
+    },
+    {
+      "taskId": "77",
+      "score": 0,
+      "solveDurationMs": 335329.386219,
+      "solveTimedOut": false,
+      "totalTokens": 2963918
+    },
+    {
+      "taskId": "78",
+      "score": 0,
+      "solveDurationMs": 48360.73203699989,
+      "solveTimedOut": false,
+      "totalTokens": 421385
+    },
+    {
+      "taskId": "79",
+      "score": 1,
+      "solveDurationMs": 303533.5090999999,
+      "solveTimedOut": false,
+      "totalTokens": 2736047
+    },
+    {
+      "taskId": "80",
+      "score": 0,
+      "solveDurationMs": 309542.1362800002,
+      "solveTimedOut": false,
+      "totalTokens": 4406478
+    },
+    {
+      "taskId": "81",
+      "score": 1,
+      "solveDurationMs": 376214.83632200025,
+      "solveTimedOut": false,
+      "totalTokens": 1612212
+    },
+    {
+      "taskId": "82",
+      "score": 0,
+      "solveDurationMs": 3300644.023791,
+      "solveTimedOut": false,
+      "totalTokens": 9215610
+    },
+    {
+      "taskId": "83",
+      "score": 0,
+      "solveDurationMs": 356938.46308000013,
+      "solveTimedOut": false,
+      "totalTokens": 4246878
+    },
+    {
+      "taskId": "84",
+      "score": 0,
+      "solveDurationMs": 318957.3565910002,
+      "solveTimedOut": false,
+      "totalTokens": 3876984
+    },
+    {
+      "taskId": "85",
+      "score": 0,
+      "solveDurationMs": 360260.1022380013,
+      "solveTimedOut": false,
+      "totalTokens": 5047552
+    },
+    {
+      "taskId": "86",
+      "score": 1,
+      "solveDurationMs": 1486839.4111749995,
+      "solveTimedOut": false,
+      "totalTokens": 7035159
+    },
+    {
+      "taskId": "87",
+      "score": 1,
+      "solveDurationMs": 101174.33033600077,
+      "solveTimedOut": false,
+      "totalTokens": 651077
+    },
+    {
+      "taskId": "88",
+      "score": 0,
+      "solveDurationMs": 97967.46873500012,
+      "solveTimedOut": false,
+      "totalTokens": 1334233
+    },
+    {
+      "taskId": "89",
+      "score": 0,
+      "solveDurationMs": 129569.97203800082,
+      "solveTimedOut": false,
+      "totalTokens": 1264907
+    }
+  ]
+}
