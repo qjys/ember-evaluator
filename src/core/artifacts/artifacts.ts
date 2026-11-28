@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { lstat, readdir } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve, sep, win32 } from "node:path";
-import type { FileEntry, FileManifest } from "../contracts/result.js";
+import type { AttemptKey, RunManifest, FileEntry, FileManifest } from "../contracts/result.js";
 
 const metadata = new Set(["allocation.json", "result.json", "files.json"]);
 const inventoryFailure = "inventory read failed";
@@ -29,6 +29,14 @@ async function evidencePathState(root: string, path: string): Promise<"absent" |
 }
 export function safeTaskKey(taskId: string): string {
   return createHash("sha256").update(taskId).digest("hex");
+}
+export function resultDirectory(run: RunManifest, key: AttemptKey): string {
+  if (run.resultLayout) {
+    const concurrency = run.resultLayout.points[key.taskId];
+    if (!Number.isSafeInteger(concurrency) || !concurrency || concurrency < 1) throw new Error("Unknown measurement point");
+    return `c${concurrency}`;
+  }
+  return `tasks/${safeTaskKey(key.taskId)}/attempts/${key.attemptId}`;
 }
 export function evidencePath(path: string): string {
   if (!path || path.includes("\0") || isAbsolute(path) || win32.isAbsolute(path))
@@ -72,7 +80,7 @@ export async function inspectFile(root: string, path: string): Promise<FileEntry
   return { path: normalized, size, sha256: hash.digest("hex") };
 }
 
-export async function buildFileManifest(root: string, expected: string[], onFile?: (count: number) => void): Promise<FileManifest> {
+export async function buildFileManifest(root: string, expected: string[], onFile?: (count: number) => void, point = false): Promise<FileManifest> {
   const required = [...new Set(expected.map(evidencePath))];
   const result: FileManifest = { files: [], missing: [] };
   const recordFailure = (path: string, error: unknown) => {
@@ -88,7 +96,7 @@ export async function buildFileManifest(root: string, expected: string[], onFile
       return;
     }
     for (const name of names) {
-      if (!prefix && (metadata.has(name) || /^\.evaluator-.*\.tmp$/.test(name))) continue;
+      if (!prefix && (metadata.has(name) || (point && name === "measurement.json") || /^\.evaluator-.*\.tmp$/.test(name))) continue;
       const path = prefix ? `${prefix}/${name}` : name;
       let stat;
       try {
@@ -125,11 +133,11 @@ export async function buildFileManifest(root: string, expected: string[], onFile
   return result;
 }
 
-export async function verifyFileManifest(root: string, manifest: FileManifest): Promise<void> {
+export async function verifyFileManifest(root: string, manifest: FileManifest, point = false): Promise<void> {
   const seen = new Set<string>();
   const inventory = await buildFileManifest(
     root,
-    manifest.missing.map(entry => entry.path),
+    manifest.missing.map(entry => entry.path), undefined, point,
   );
   const actualFiles = new Map(inventory.files.map(entry => [entry.path, entry]));
   const actualMissing = new Map(inventory.missing.map(entry => [entry.path, entry]));

@@ -90,13 +90,13 @@ Seed remains 42 with the 0.25–0.75 starting window, official warmup, and origi
 
 `durationSeconds` excludes preparation/warmup/teardown;60 does not bound the whole command. Default task budget is 10800 seconds and need not change for 60. Total must be at least `durationSeconds + 3900`; increase `run.timeoutSeconds` for longer windows. Insufficient budgets fail before execution.
 
-`replay` completes the first N traces, requiring explicit traceCount. The example uses first 50 sessions, tree concurrency 8, and starts at request0, finishing all main/subagent requests. It retains official reconstruction/dependencies/waits, disables extra single-token warmup, and profiles every request. Startup/drain make it incomparable to one-hour standard. `durationSeconds` defaults 86400 as a safety cap; task budget 172800. Early caps, missing/duplicate/cancelled requests fail points with partial artifacts; resume reruns whole points. Concurrency cannot exceed selected sessions.
+`replay` completes the first N traces, requiring explicit traceCount. The example uses first 50 sessions, tree concurrency 8, and starts at request0, finishing all main/subagent requests. It retains official reconstruction/dependencies/waits, disables extra single-token warmup, and profiles every request. Startup/drain make it incomparable to one-hour standard. `durationSeconds` defaults 86400 as a safety cap; task budget 172800. Early caps, missing/duplicate/cancelled requests fail points with partial artifacts; a new run remeasures the point. Concurrency cannot exceed selected sessions.
 
 Replay safety caps permit early completion of finite requests. Source-request coordinate coverage replaces standard fixed-window duration coverage. Harness still exports actual windows/metrics. Replay remains incomparable; standard retains official time-window checks.
 
 Few traces may still take hours due to dozens of main requests, branches, and original waits. Harness1.0.7 skips some waits only during global idleness, not per-request delays. Two traces with600-second caps can fail despite successful requests if source dispatch is incomplete. Inspect `harness.log` `timeout_triggered`, branch counts, replay-coverage.json. Distinguish safety deadlines from request/branch bugs; increase budgets while retaining original loads rather than deleting waits/branches.
 
-Solver accepts `tokenizerRevision`, `requestTimeoutSeconds`, `trustRemoteCode`, and `networkLatency` below. Tokenizers resolve to commits/digests; resume validates/reuses them. `trustRemoteCode` defaults false. Traces control output lengths; do not set services.maxTokens. Supported scope: `agentx-replay`, local scheduling, local/Docker, one automatic attempt; no Ray, ordinary agent Solver, or correctness Verifier.
+Solver accepts `tokenizerRevision`, `requestTimeoutSeconds`, `trustRemoteCode`, and `networkLatency` below. Tokenizers resolve to commits/digests; their identity is recorded. `trustRemoteCode` defaults false. Traces control output lengths; do not set services.maxTokens. Supported scope: `agentx-replay`, local scheduling, local/Docker, one measurement per point; no Ray, ordinary agent Solver, or correctness Verifier.
 
 ### Network Latency Calibration
 
@@ -124,7 +124,7 @@ networkLatency: # Under benchmark.solver.config
 
 `meanMs` must be finite/nonnegative. Manual mode performs no TCP probes and disallows `pingIntervalSeconds`; automatic disallows meanMs. Unknown or mixed-mode fields fail before execution.
 
-For runs without service collections, results appear in `result.json` `solve.observations.networkLatency`, `performance/agentx-summary.json`, and metrics.json. Reports show mode, deducted mean RTT, total/success/failed probes, and raw/adjusted TTFT, TTFO, request latency (mean/P50/P95/P99). Adjusted distributions come directly from official `network_adjusted_*` exports, without recomputation. ITL/throughput/existing comparisons retain raw metrics.
+For runs without service collections, results appear in `metrics/service/requests.json` and the point’s `performance/agentx-summary.json`. Reports show mode, deducted mean RTT, total/success/failed probes, and raw/adjusted TTFT, TTFO, request latency (mean/P50/P95/P99). Adjusted distributions come directly from official `network_adjusted_*` exports, without recomputation. ITL/throughput/existing comparisons retain raw metrics.
 
 `complete` means usable RTT and adjusted metrics. Failed/missing probes or missing adjusted metrics yield `partial` with data/warnings retained; no usable RTT/adjusted values yields unavailable. Missing values show `—`, never0. Calibration absence does not replace request success/failure. Pinned harness manual `meanMs: 0` may export no adjusted metrics; report `unavailable` while retaining raw values.
 
@@ -132,29 +132,24 @@ Automatic mode saves individual probes in `performance/outputs/profile_export_ne
 
 Mean TCP RTT estimates network round trips only, not every proxy/transport/client overhead, nor actual throughput/session impacts. See [official calibration definitions](https://github.com/SemiAnalysisAI/agentx-harness/blob/master/docs/metrics-reference.md#network-latency-calibration-metrics).
 
-## Results, Resume, and Offline Reports
+## Reading and rebuilding results
 
-Each concurrency point has a separate attempt saving:
+Open `<run_id>/report.md` to compare concurrency points. Scripts can read `metrics/index.json` for per-point coverage and category paths relative to the index. Each category file covers all selected concurrency levels. Its evidence paths are relative to the run root. A requested metric with no samples records a reason. Disabled metrics have an index entry only.
 
-- Each pass writes its summary to `performance/agentx-summary.json` or `profiling/agentx-summary.json`. Dual-pass attempts also store per-step results in `result.json` under `steps[].solve.observations`.
-- `agent/trajectory.jsonl`, `session.jsonl`, and redacted bridge logs.
-- `performance/outputs/` and `profiling/outputs/` each hold one copy of the raw Harness exports and logs from that pass. Failed and cancelled attempts publish available output and list missing required files in `files.json`.
-- Each replay writes `replay-coverage.json` alongside its raw data to audit trace IDs and original outer/inner request coordinates. The diagnostic warmup session, trajectory and coverage live under `profiling/outputs/warmup/`.
+| Metric directory | Files |
+| --- | --- |
+| `metrics/service/` | `requests.json` for formal request latency percentiles, throughput, counts and warmup statistics |
+| `metrics/engine/` | `engine.json` for KV cache, running and waiting requests |
+| `metrics/resource/` | `host.json`, `npu.json` for service-node and device resources |
+| `metrics/execution/` | `operators.json`, `runtime.json` for operators, shapes, dispatch and memory copies |
+| `metrics/hardware/` | `hbm.json`, `pmu.json`, `cache.json` for bandwidth, pipeline and cache counters |
+| `metrics/parallelism/` | `communication.json`, `timeline.json` for inter-rank communication and compute overlap |
 
-Profiling/warmup are separate. TTFT/ITL/request latency/Interactivity distributions come from official exports; throughput uses harness measurement time. Point percentiles are not merged. Missing values stay unknown; token usage sums only fields available for both warmup/profiling, not provider bills.
+In each point directory, such as `c1/` or `c8/`, `measurement.json` records pass results, status and errors. `files.json` lists raw files, checksums and missing evidence. Inspect `performance/outputs/` or `profiling/outputs/` for the respective Harness logs, per-request exports and replay coverage. Diagnostic warmup records live in `profiling/outputs/warmup/`. Each pass stores its session and trajectory under its own `agent/` directory.
 
-For multiple points without `engineMetrics` or `profiling`, root `report.md` lists status and report links. `[1, 4, 8]` creates `points/c1/report.md`, `points/c4/report.md`, `points/c8/report.md`, each with metrics.json. Each contains only its request/warmup/vLLM/device-chip metrics, duration, usage, and attempts, including failure/unrun status pages. A single point retains detailed root report.md.
+The Harness exports separate warmup and measurement windows. Percentiles apply to one concurrency point, throughput uses the Harness measurement time, and token usage sums the fields available in both windows.
 
-Root `metrics.json` keeps batch machine data/subreport indexes. Point metrics recalculate from their own records. Raw links point to original attempts without copying trajectories/artifacts. Points share run ID/source lock/resume state and execute sequentially.
-
-`upstreamSubmissionValid` preserves harness judgment; `comparable` additionally checks scenario/source/completeness. Compare identical corpus commits, scenario, tokenizer, concurrency, and deployment. Completed replay does not establish leaderboard eligibility.
-
-```bash
-arsi-evaluator run playbook/agentx/agentx-standard.yaml --resume
-arsi-evaluator report results/agentx-standard/RUN_ID
-```
-
-Completed points skip; failed/cancelled/timed-out points get full new attempts, not request continuation. Performance timeouts are not zeros. `report` rebuilds indexes/point reports and repairs missing/corrupt subreports from saved data/built-in plugins, without Python/model credentials/cache. Explicit resume writes `reports/resume-N/` and preserves prior reports; retry/offline `report` update current reports. See [report storage](../usage.md#resume-and-rebuild-reports).
+Run the same YAML again to start an independent measurement. Use `arsi-evaluator report <run_dir>` offline to rebuild the report and all category files from saved evidence. Historical runs rebuild in their original format.
 
 ## vLLM and Ascend NPU Metrics
 
@@ -240,7 +235,7 @@ ssh -N -L 18094:127.0.0.1:18094 -L 18095:127.0.0.1:18095 user@server
 
 SSH authentication belongs to deployment, not YAML. Models need full trace context/output; even small262144-context models require real single-card validation. Service startup, model install, and preflight are excluded from request metrics.
 
-`agentx-summary.json` stores source status, labeled series, missing metrics, profiling/warmup windows, and sample counts. Counts mean distinct in-window upstream JSONL snapshots, not HTTP scrapes. Aggregation may extend to final sampling; reports show actual bounds. Raw server_metrics_export.json/.jsonl accompanies attempts. Temporary scrape failures wait for the next harness cycle without aborting requests or discarding monitoring. Missing data/required metrics remain explicit. Offline reports access no devices/endpoints.
+`agentx-summary.json` stores source status, labeled series, missing metrics, profiling/warmup windows, and sample counts. Counts mean distinct in-window upstream JSONL snapshots, not HTTP scrapes. Aggregation may extend to final sampling; reports show actual bounds. Raw server_metrics_export.json/.jsonl is saved with the corresponding pass. Temporary scrape failures wait for the next harness cycle without aborting requests or discarding monitoring. Missing data/required metrics remain explicit. Offline reports access no devices/endpoints.
 
 New results use telemetry v2 with multiple devices/chips and empty endpoints after discovery failure. Historical v1 converts at read boundaries for offline processing, without rewriting originals. `local-telemetry.json` saves devices/chips/dynamic endpoints/errors. `complete` means required statistics exist, not every scrape succeeded; `partial` means missing data/metrics; `unavailable` means no usable statistics. Available-source diagnostics appear in optional warnings/reports. Monitoring status does not change `submission_valid` or request comparability.
 
@@ -254,7 +249,7 @@ Set `benchmark.config.measurementMode` in the [tuning playbook](../../../playboo
 | --- | --- | --- |
 | `performance` | Run the formal load with the service profiler idle | Request and token throughput, TTFT, per-request TPOT, ITL, latency, KV cache and queue samples |
 | `profiling` | Warm up with one tree, then profile one bounded replay | Diagnostic evidence and paths to raw exports |
-| `all` | One task per concurrency. Run the formal pass and then the diagnostic pass within the same attempt. | One report pairs both passes. Successful formal results survive diagnostic failures. |
+| `all` | Run the formal pass and then the diagnostic pass for each concurrency point. | One report pairs both passes. Successful formal results survive diagnostic failures. |
 
 ```bash
 arsi-evaluator run playbook/agentx/agentx-service-profiling.yaml
@@ -291,18 +286,6 @@ With a local loopback service endpoint, setting `profiling.devices: [1]` also re
 
 Use `profiling.nodeMetrics` to sample an exporter on the serving node. For example, set `endpoint: http://inference-node:9100/metrics` and `names: [node_cpu_seconds_total, node_memory_MemAvailable_bytes, node_network_receive_bytes_total]`. Select the actual names from a device exporter for NPU memory and utilization. The evidence retains labels, source URL and timestamps.
 
-Each run writes `report.md` and `metrics.json` for offline use. With `concurrency: [1, 8]` and `measurementMode: all`, the order is c1 formal → c1 diagnostic → c8 formal → c8 diagnostic. Only the formal pass contributes to request latency and throughput. Follow the per-point artifact paths in the report.
-
-```text
-tasks/<task-hash>/attempts/<attempt-id>/
-├── performance/       # Formal summary and collection status
-│   └── outputs/       # Request records, Harness exports and engine samples
-├── profiling/
-│   ├── outputs/       # Diagnostic Harness exports and replay coverage
-│   └── trace/         # Service profiler exports and configured hardware samples
-└── steps/             # Evaluator step records, logs and session trajectories
-```
-
-Single-pass modes produce the selected measurement directory. A failed diagnostic retains the verified formal results and its failure reason in the report. Retrying the task runs its selected passes in a new attempt. The per-task `run.timeoutSeconds` covers both passes and trace export. Historical split-task runs rebuild offline using their original paths. To finish an incomplete split-task run, resume with its original version or start a new run with this version. The shared mount keeps original service traces. Use `profiling.service` for a dedicated diagnostic instance serving the same model.
+With `concurrency: [1, 8]` and `measurementMode: all`, each point runs its formal pass followed by its diagnostic pass. Inspect `c1/performance/` and `c8/performance/` for formal evidence and the corresponding `profiling/trace/` directories for native rank exports. A failed diagnostic retains the verified formal measurement for comparison. Single-pass runs create only the selected pass. Each point's `run.timeoutSeconds` covers measurement and trace export. The shared mount retains the original service traces. Use `profiling.service` to select a dedicated diagnostic instance serving the same model.
 
 [User guide](../README.md) · [Quick start](../quick-start.md)

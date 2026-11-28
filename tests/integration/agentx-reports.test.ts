@@ -21,12 +21,15 @@ afterEach(async () => {
   for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true });
 });
 const plugins = () => [new AgentXPerformanceMetrics(), new DurationMetrics(), new UsageMetrics()];
-async function setup(concurrencies = [1, 4, 8], failed?: number, pending?: number) {
+async function setup(concurrencies = [1, 4, 8], failed?: number, pending?: number, pointLayout = false) {
   await mkdir(".scratch", { recursive: true });
   const root = await mkdtemp(resolve(".scratch/agentx-reports-")); roots.push(root);
   const store = new LocalRunStore(); stores.push(store);
   const ids = concurrencies.map(n => `agentx-256k-standard-c${n}`);
   await store.create(root, { ...storeRun, taskIds: ids, evaluationKind: "performance",
+    ...(pointLayout ? { resultLayout: { kind: "inference-engine", version: 1,
+      points: Object.fromEntries(ids.map((id, i) => [id, concurrencies[i]!])),
+      requestedMetrics: ["service/requests", "engine/engine", "resource/npu"] } } : {}),
     source: { source: "fixture", revision: workload.revision, metadata: {},
       files: [{ path: "traces.jsonl", origin: "https://fixture.invalid/traces", sha256: workload.sha256 }] } },
   { metrics: plugins().map(metric => ({ name: metric.name, config: {} })), reporter: { name: "markdown", config: {} } });
@@ -197,4 +200,40 @@ test("resume preserves independent point reports and retry updates only the curr
   }
   await saveReport(store, plugins(), new MarkdownReporter(), "resume");
   expect((await readdir(join(directory, "reports"))).sort()).toEqual(["current.json", "initial", "resume-1", "resume-2"]);
+});
+
+test("point layout compares request statistics and rebuilds a failed point without creating task directories", async () => {
+  const { store, directory } = await setup([1, 8], 8, undefined, true);
+  await saveReport(store, plugins(), new MarkdownReporter());
+  const read = (path: string) => readFile(join(directory, path), "utf8");
+  expect((await readdir(directory)).sort()).toEqual(["c1", "c8", "config.yaml", "manifest.json", "metrics", "report.md", ".writer.lock"].sort());
+  const path = "metrics/service/requests.json";
+  const original = await read(path);
+  const index = JSON.parse(await read("metrics/index.json"));
+  expect(index.files["service/requests"]).toEqual({ path: "service/requests.json", status: { c1: "measured", c8: "unavailable" } });
+  expect(index.files["execution/operators"]).toEqual({ path: null, status: { c1: "disabled", c8: "disabled" } });
+  expect(JSON.parse(original).points[0].performance.values.statistics.ttft.unit).toBe("ms");
+  expect(JSON.parse(original).points[1].reason).toContain("failed-c8");
+  expect(await read("report.md")).toContain("c1/measurement.json");
+  expect(await readdir(join(directory, "metrics"))).not.toContain("hardware");
+  await store.close();
+  await rm(join(directory, "metrics"), { recursive: true });
+  await rm(join(directory, "report.md"));
+  await rebuildReport(directory);
+  expect(await read(path)).toBe(original);
+  expect(JSON.parse(await read("metrics/index.json"))).toEqual(index);
+});
+
+test("device coverage stays partial when only one of two ranks supplies HBM", async () => {
+  const { store } = await setup([1], undefined, undefined, true);
+  const snapshot = await store.snapshot();
+  snapshot.run.resultLayout!.requestedMetrics = ["hardware/hbm"];
+  const point = { taskId: snapshot.run.taskIds[0]!, collections: [{ profiling: { status: "measured", artifactDirectory: "c1/profiling",
+    categories: { hbmBandwidth: { status: "partial", observed: 1, expected: 2, reason: "missing rank 1" } },
+    exports: [{ artifactDirectory: "trace/rank0", native: { hbmChannels: [{ meanMBps: 351 }] },
+      artifacts: { outputs: ["ascend_pytorch_profiler_0.db"] } }] } }] };
+  const file = new AgentXPerformanceMetrics().measurementFiles(snapshot, { points: [point] }).find(f => f.path === "hardware/hbm");
+  expect(file).toMatchObject({ status: { c1: "partial" }, points: [{ profiling: { status: "partial", values: {
+    coverage: { hbmBandwidth: { expected: 2, observed: 1 } }, ranks: [{ files: ["c1/profiling/trace/rank0/ascend_pytorch_profiler_0.db"],
+      statistics: { hbmChannels: [{ meanMBps: 351 }] } }] } } }] });
 });

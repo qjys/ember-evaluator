@@ -4,9 +4,11 @@ import type { JsonValue } from "../../core/contracts/task.js";
 import { parseAgentXSummary, successfulAgentXWindow } from "../benchmarks/inference-engine/agentx/evidence/summary.js";
 import { selectedRecords } from "./records.js";
 import { attemptStatus, isEvaluationComplete } from "../../core/results/evaluation-outcome.js";
-import { safeTaskKey } from "../../core/artifacts/artifacts.js";
+import { resultDirectory } from "../../core/artifacts/artifacts.js";
+import { agentXMeasurementFiles } from "./agentx-measurement-files.js";
 
 export class AgentXPerformanceMetrics implements Metrics {
+  readonly measurementFiles = agentXMeasurementFiles;
   readonly name = "agentx-performance";
   async compute(snapshot: ResultSnapshot): Promise<JsonValue> {
     const records = selectedRecords(snapshot);
@@ -26,7 +28,7 @@ export class AgentXPerformanceMetrics implements Metrics {
     const selected = new Set(snapshot.run.taskIds);
     const artifact = (id: string, tail: string) => {
       const record = byTask.get(id);
-      return record ? `tasks/${safeTaskKey(id)}/attempts/${record.key.attemptId}/${tail}` : null;
+      return record ? `${resultDirectory(snapshot.run, record.key)}/${tail}` : null;
     };
     const points = [...new Set(snapshot.run.taskIds.map(id => id.replace(/-profiling$/u, "")))].map(taskId => {
       const formal = byTask.get(taskId);

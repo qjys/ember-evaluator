@@ -124,13 +124,12 @@ Run in order and fix failures before proceeding. `doctor` performs network downl
 
 `[1, 4, 8]` are sequential active-session-tree levels, each one hour by default or 60 seconds with `durationSeconds: 60`, plus other stages. They are not fixed concurrent HTTP request counts. Run after configuration checks pass.
 
-## 4. Read Reports and Resume
+## 4. Read and rebuild the report
 
-Open `<RUN_ID>/report.md` under selected output.directory. Local NPU defaults to `results/agentx-npu-local`; online API to results/agentx-model-api. Details are `points/c1/report.md`, `points/c4/report.md`, `points/c8/report.md`, each with metrics.json. Check harness validity, request errors, and enabled-source completeness; `completed` alone does not establish comparability.
+Open `<RUN_ID>/report.md` under the YAML's `output.directory`. To compare TTFT P95 across points, open `metrics/service/requests.json`. Read `metrics/index.json` for category paths and coverage. Find raw evidence in `c1/`, `c4/` and `c8/`. Check Harness validity, request errors and collection coverage in the report.
 
 ```bash
-arsi-evaluator run "$EVALUATOR_CONFIG" --resume
 arsi-evaluator report /path/to/results/RUN_ID
 ```
 
-Resume skips completed points and reruns unfinished points in full. Offline reports need no model service, sampling, or keys. See [AgentX](../benchmarks/agentx.md) for scenarios/definitions.
+Offline rebuilding uses the saved run directory. Execute the YAML again for a fresh measurement. See the [AgentX guide](../benchmarks/agentx.md) for metric definitions.

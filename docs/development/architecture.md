@@ -60,6 +60,8 @@ CLI `run` 和 SDK `Evaluator.run()` 使用 [application/run.ts](../../src/applic
 
 任务声明 `artifactDirectory` 时，执行器在求解环境静止后将同名工作目录发布到 attempt 的 `<name>/outputs/`。文件清单逐项校验原始文件；多步任务共用这份目录，失败或取消仍走相同的补收集流程。
 
+Benchmark 可通过 `resultLayout()` 声明按并发保存的推理引擎布局。manifest 固定布局版本，store 将每档直接写入 `cN/` 并只允许测量一次。指标插件通过 `measurementFiles()` 提供分类结果，store 发布文件、报告和 `metrics/index.json`。离线重建按 manifest 选择布局；历史运行使用原有清单和 attempt 路径。
+
 `createRunComponents` 和 `createBenchmark` 必须接收已有注册表，不负责打开或关闭注册表。前者返回不含 `dispose()` 的 `RunComponents`，后者直接返回 Benchmark；工厂创建的资源一直由该注册表管理，装配失败也由注册表所有者的 `finally` 清理。
 
 公开 [bootstrap](../../src/application/plugins/bootstrap.ts) 自行打开注册表，失败时关闭，成功时返回 `BootstrappedComponents`（组件字段加 `dispose()`）。其签名为 `bootstrap(config, directory, patchPath?, onWarning?, imageConfigFingerprint?)`，调用方在 `finally` 中调用返回值的 `dispose()`。重复释放由注册表处理。

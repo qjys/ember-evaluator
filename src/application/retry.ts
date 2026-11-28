@@ -8,6 +8,7 @@ import { dirname, join } from "node:path";
 import type { RunManifest } from "../core/contracts/result.js";
 import { gatewayRun, locateRun } from "../infrastructure/filesystem/run-index.js";
 import { submitRetry, controlTransaction } from "./retry-control/mailbox.js";
+import { assertResumable } from "../core/recovery/resume.js";
 import { isManualRetryEligible } from "../core/recovery/manual-retry.js";
 import { identifyNetworkFailure } from "../core/errors/network-failure.js";
 import { loadSavedConfig } from "./config.js";
@@ -48,8 +49,16 @@ export async function retryRun(options: { networkConfigPath?: string; run: strin
     } finally { await registry.dispose(); }
   }
   const directory = await locateRun(options.run);
-  await requireCredentialReferences(join(directory, "config.yaml"));
-  const manifest = JSON.parse(await readFile(join(directory, "manifest.json"), "utf8")) as RunManifest;
+  const savedConfig = join(directory, "config.yaml");
+  const manifestText = await readFile(join(directory, "manifest.json"), "utf8").catch(async (error: unknown) => {
+    // A partially initialized directory may contain only its credential references.
+    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT")
+      await requireCredentialReferences(savedConfig);
+    throw error;
+  });
+  const manifest = JSON.parse(manifestText) as RunManifest;
+  assertResumable(manifest);
+  await requireCredentialReferences(savedConfig);
   const configDirectory = manifest.pluginRuntime?.configDirectory ?? dirname(directory);
   const patchPath = manifest.pluginRuntime?.patchPath;
   // Rebind original service references before admitting work; no model overrides are accepted.

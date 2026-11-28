@@ -124,13 +124,12 @@ arsi-evaluator run "$EVALUATOR_CONFIG"
 
 `[1, 4, 8]` 是三档活动会话树数，依次执行，每档默认一小时；配置 `durationSeconds: 60` 后每档测量 60 秒，另加准备、预热及收尾。不是固定的同时 HTTP 请求数。配置检查通过后执行测评。
 
-## 4. 查看报告和续跑
+## 4. 查看和离线重建报告
 
-在所选 YAML 的 `output.directory` 下打开 `<RUN_ID>/report.md` 目录页。例如 local NPU 示例输出到 `results/agentx-npu-local`，在线 API 示例输出到 `results/agentx-model-api`。三档详细结果分别是 `points/c1/report.md`、`points/c4/report.md`、`points/c8/report.md`，每档有自己的 `metrics.json`。确认 Harness 有效性、请求错误和已启用来源的采集完整性；`completed` 本身不代表正式可比。
+在 YAML 的 `output.directory` 下打开 `<RUN_ID>/report.md`。例如，比较各档的 TTFT P95 时读取 `metrics/service/requests.json`，查询分类文件路径时读取 `metrics/index.json`。各档的原始文件在 `c1/`、`c4/`、`c8/`。报告记录 Harness 有效性、请求错误和采集覆盖。
 
 ```bash
-arsi-evaluator run "$EVALUATOR_CONFIG" --resume
 arsi-evaluator report /path/to/results/RUN_ID
 ```
 
-续跑跳过已完成点，未完成点整档重跑。离线报告不需要模型服务、硬件采样或模型 key。更多场景和指标口径见[AgentX 完整指南](../benchmarks/agentx.zh-CN.md)。
+离线重建仅需已保存的运行目录。重新测量时再次执行原 YAML。更多指标口径见[AgentX 指南](../benchmarks/agentx.zh-CN.md)。

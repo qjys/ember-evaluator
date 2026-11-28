@@ -16,7 +16,7 @@ import { runEngine } from "./run-engine.js";
 import { normalizeFailure } from "../core/errors/classify.js";
 import type { ProgressEvent, ProgressListener } from "../core/progress/progress.js";
 import { LiveOperation, safeProgress } from "../core/progress/live-progress.js";
-import { resolveResumeRun } from "../core/recovery/resume.js";
+import { assertResumable, resolveResumeRun } from "../core/recovery/resume.js";
 import { ResumeError } from "../core/recovery/resume-error.js";
 import { openPluginRegistry, type PluginRegistry } from "./plugins/open-registry.js";
 import { saveReport } from "./report/index.js";
@@ -144,6 +144,7 @@ export async function executeExperiment(options: ExecutionOptions): Promise<Exec
         const resumeDirectory = await resolveResumeRun(config.experiment.output.directory, resume);
         if (resumeDirectory) {
           const saved = JSON.parse(await readFile(join(resumeDirectory, "manifest.json"), "utf8")) as RunManifest;
+          assertResumable(saved);
           pluginSelections = restorePluginActivations(saved.pluginRuntime?.plugins, overrides.plugins ?? options.execution?.plugins);
         }
       } catch (error) {

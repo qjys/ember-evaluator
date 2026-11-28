@@ -20,12 +20,11 @@ import type {
   RunManifest,
 } from "../../core/contracts/result.js";
 import type { JsonValue } from "../../core/contracts/task.js";
-import type { MetricResults } from "../../core/contracts/metrics.js";
+import type { MeasurementMetricFile, MetricResults } from "../../core/contracts/metrics.js";
 import { fingerprintConfig } from "../../core/results/run-manifest.js";
-import { checkedPath, verifyFileManifest } from "../../core/artifacts/artifacts.js";
+import { checkedPath, resultDirectory, safeTaskKey, verifyFileManifest } from "../../core/artifacts/artifacts.js";
 import { assertAttemptRecord, trajectoryType } from "../../core/results/record-validation.js";
 import { inspectReportPair } from "./report-state.js";
-import { safeTaskKey } from "../../core/artifacts/artifacts.js";
 import { selectAttemptRecords } from "../../core/results/task-result-resolver.js";
 import { isEvaluationComplete } from "../../core/results/evaluation-outcome.js";
 import { assertSourceLock } from "../../core/results/source-lock.js";
@@ -94,6 +93,16 @@ function validateRun(run: RunManifest): void {
   safeId(run.runId);
   try {
     if (!["quality", "performance"].includes(run.evaluationKind)) throw new TypeError("Invalid evaluation kind");
+    const layout = run.resultLayout;
+    if (layout !== undefined) {
+      if (layout.kind !== "inference-engine" || layout.version !== 1 || run.evaluationKind !== "performance" ||
+          !layout.points || Array.isArray(layout.points) || typeof layout.points !== "object" ||
+          !Array.isArray(layout.requestedMetrics) || layout.requestedMetrics.some(name => !/^[a-z]+\/[a-z]+$/u.test(name)))
+        throw new TypeError("Invalid measurement layout");
+      const points = Object.values(layout.points);
+      if (points.some(c => !Number.isSafeInteger(c) || c < 1) || new Set(points).size !== points.length ||
+          run.taskIds.some(id => !Object.hasOwn(layout.points, id))) throw new TypeError("Invalid measurement points");
+    }
     if (run.source !== null) assertSourceLock(run.source);
     else if (run.taskIds.length) throw new TypeError("Uninitialized run cannot declare tasks");
     for (const failure of [...(run.initializationFailures ?? []), ...(run.failure ? [run.failure] : [])])
@@ -287,7 +296,7 @@ export class LocalRunStore implements RunStore {
       }
       await this.lock(directory);
       try {
-        await mkdir(join(directory, "tasks"));
+        if (!manifest.resultLayout) await mkdir(join(directory, "tasks"));
         // JSON syntax is valid YAML, and avoids an additional parser dependency in storage.
         await atomicWrite(join(directory, "config.yaml"), serialized(safe));
         await atomicWrite(join(directory, "manifest.json"), serialized(manifest));
@@ -321,14 +330,21 @@ export class LocalRunStore implements RunStore {
     const { directory, run } = this.active();
     if (key.runId !== run.runId || !run.taskIds.includes(key.taskId))
       throw new StoreError("STORE_RECORD_INVALID", "Attempt not selected in this run");
-    const root = join(directory, "tasks", safeTaskKey(key.taskId), "attempts", safeId(key.attemptId));
-    return { root, agent: join(root, "agent"), verifier: join(root, "verifier"), artifacts: join(root, "artifacts") };
+    safeId(key.attemptId);
+    const root = join(directory, resultDirectory(run, key));
+    return { ...(run.resultLayout ? { measurementPoint: true } : {}), root, agent: join(root, "agent"), verifier: join(root, "verifier"), artifacts: join(root, "artifacts") };
   }
 
   async allocate(key: AttemptKey): Promise<AttemptPaths> {
     return this.write(async () => {
       const paths = this.paths(key);
       const { directory } = this.active();
+      if (paths.measurementPoint) {
+        await mkdir(paths.root); // Exclusive creation prevents a second measurement from overwriting the first.
+        const allocation: AttemptSummary = { key, ordinal: 1, allocatedAt: new Date().toISOString(), record: null };
+        await atomicWrite(join(paths.root, "measurement.json"), serialized(allocation));
+        return paths;
+      }
       const relativeParent = `tasks/${safeTaskKey(key.taskId)}/attempts`;
       await checkedPath(directory, "tasks");
       const taskDir = join(directory, "tasks", safeTaskKey(key.taskId));
@@ -366,6 +382,23 @@ export class LocalRunStore implements RunStore {
     const { directory, run } = this.active();
     const summaries: AttemptSummary[] = [];
     for (const taskId of taskIds ?? run.taskIds) {
+      if (run.resultLayout) {
+        const name = `c${run.resultLayout.points[taskId]}`;
+        if (!await exists(join(directory, name))) continue;
+        const root = await checkedPath(directory, name);
+        const saved = await json<AttemptSummary>(await checkedPath(root, "measurement.json"));
+        if (saved.key.runId !== run.runId || saved.key.taskId !== taskId || saved.ordinal !== 1 || !Number.isFinite(Date.parse(saved.allocatedAt)))
+          throw new StoreError("STORE_RECORD_INVALID", "Invalid measurement identity");
+        safeId(saved.key.attemptId);
+        if (saved.record !== null) {
+          assertAttemptRecord(saved.record, true);
+          if (!sameKey(saved.record.key, saved.key) || saved.record.evaluationKind !== run.evaluationKind)
+            throw new StoreError("STORE_RECORD_INVALID", "Measurement does not match its point");
+          await verifyFileManifest(root, await json<FileManifest>(await checkedPath(root, "files.json")), true);
+        }
+        summaries.push(saved);
+        continue;
+      }
       const parent = `tasks/${safeTaskKey(taskId)}/attempts`;
       if (!(await exists(join(directory, parent)))) continue;
       await checkedPath(directory, parent);
@@ -437,12 +470,28 @@ export class LocalRunStore implements RunStore {
   }
 
   private async publish(record: AttemptRecord, files: FileManifest): Promise<void> {
-    assertAttemptRecord(record);
     const { directory, run } = this.active();
+    assertAttemptRecord(record, !!run.resultLayout);
     if (record.evaluationKind !== run.evaluationKind)
       throw new StoreError("STORE_RECORD_INVALID", "Attempt evaluation kind differs from its run");
     const paths = this.paths(record.key);
     await checkedPath(directory, relative(directory, paths.root));
+    if (paths.measurementPoint) {
+      const path = await checkedPath(paths.root, "measurement.json");
+      const saved = await json<AttemptSummary>(path);
+      if (!sameKey(saved.key, record.key) || saved.record !== null)
+        throw new StoreError("STORE_CONFLICT", "Cannot replace an existing measurement");
+      await verifyFileManifest(paths.root, files, true);
+      if (record.collection.trajectory === "complete") {
+        const phases = record.steps?.map(step => step.evidencePath) ??
+          files.files.filter(f => /^[a-z][a-z0-9_-]*\/agent\/trajectory\.jsonl$/u.test(f.path)).map(f => f.path.split("/")[0]!);
+        if (!phases.length) throw new StoreError("STORE_RECORD_INVALID", "Missing measurement trajectory");
+        for (const phase of phases) await this.checkTrajectory(paths.root, files, record.key, phase + "/");
+      }
+      await atomicWrite(join(paths.root, "files.json"), serialized(files));
+      await atomicWrite(path, serialized({ ...saved, record }));
+      return;
+    }
     const allocation = await json<AttemptSummary>(await checkedPath(paths.root, "allocation.json"));
     if (!sameKey(allocation.key, record.key)) throw new StoreError("STORE_RECORD_INVALID", "Mismatched allocation");
     const resultPath = join(paths.root, "result.json");
@@ -571,12 +620,12 @@ export class LocalRunStore implements RunStore {
     });
   }
 
-  private async checkTrajectory(root: string, files: FileManifest, key: AttemptKey): Promise<void> {
+  private async checkTrajectory(root: string, files: FileManifest, key: AttemptKey, prefix = ""): Promise<void> {
     for (const required of ["agent/trajectory.jsonl", "agent/session.jsonl"]) {
-      if (!files.files.some(entry => entry.path === required))
+      if (!files.files.some(entry => entry.path === prefix + required))
         throw new StoreError("STORE_RECORD_INVALID", `Missing ${required}`);
     }
-    const contents = await readFile(await checkedPath(root, "agent/trajectory.jsonl"), "utf8");
+    const contents = await readFile(await checkedPath(root, prefix + "agent/trajectory.jsonl"), "utf8");
     const lines = contents.trimEnd().split("\n");
     let seq = 1;
     let end = false;
@@ -604,11 +653,39 @@ export class LocalRunStore implements RunStore {
     return this.readSnapshot();
   }
 
-  async saveReportBundle(digest: string, metrics: MetricResults, markdown: string, documents: TaskReportDocument[], mode: "update" | "resume" = "update"): Promise<void> {
+  async saveReportBundle(digest: string, metrics: MetricResults, markdown: string, documents: TaskReportDocument[], mode: "update" | "resume" = "update", measurementFiles: MeasurementMetricFile[] = []): Promise<void> {
     return this.write(async () => {
       const { directory, run } = this.active();
       if ((await this.readSnapshot()).digest !== digest)
         throw new StoreError("STORE_SNAPSHOT_CHANGED", "Cannot publish a stale snapshot");
+      if (run.resultLayout) {
+        if (mode === "resume" || documents.length) throw new StoreError("REPORT_FAILED", "Measurement runs use one run report");
+        const root = join(directory, "metrics");
+        await mkdir(root, { recursive: true });
+        await checkedPath(directory, "metrics");
+        const files = new Map(measurementFiles.map(file => [file.path, file]));
+        if (files.size !== measurementFiles.length) throw new StoreError("REPORT_FAILED", "Duplicate metric category file");
+        const index: Record<string, JsonValue> = {};
+        const names = new Set([...run.resultLayout.requestedMetrics, ...files.keys()]);
+        for (const name of names) {
+          if (!/^[a-z]+\/[a-z]+$/u.test(name)) throw new StoreError("REPORT_FAILED", "Invalid metric category path");
+          const file = files.get(name);
+          if (!file) continue;
+          if (!file.points.length) {
+            index[name] = { status: file.status, path: null };
+            continue;
+          }
+          const path = name + ".json";
+          const group = name.split("/")[0]!;
+          await mkdir(join(root, group), { recursive: true });
+          await checkedPath(root, group);
+          await atomicWrite(join(root, path), serialized({ schemaVersion: 1, snapshotDigest: digest, points: file.points }));
+          index[name] = { path, status: file.status };
+        }
+        await atomicWrite(join(directory, "report.md"), `<!-- snapshotDigest: ${digest} -->\n<!-- revision: 1 -->\n${markdown}\n`);
+        await atomicWrite(join(root, "index.json"), serialized({ schemaVersion: 1, snapshotDigest: digest, files: index }));
+        return;
+      }
       const ids = new Set<string>(), tasks = new Set<string>();
       for (const document of documents) {
         if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/u.test(document.id) || ids.has(document.id.toLowerCase()) ||

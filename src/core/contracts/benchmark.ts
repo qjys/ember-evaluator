@@ -21,6 +21,7 @@ export interface Benchmark {
   evaluateSteps?(task: PreparedTask, results: AttemptStepResult[]): { verdict: VerifyResult | null; continue: boolean };
   readonly verificationRuntime?: VerificationRuntime;
   readonly evaluationKind?: EvaluationKind;
+  resultLayout?(config: EffectiveConfig): import("./result.js").MeasurementLayout;
   /** Pure cross-component checks, also invoked for dry-run; no resource allocation. */
   validateRun?(config: EffectiveConfig): void;
   /** Check ordered task prerequisites against persisted attempts immediately before execution. */

@@ -1,4 +1,4 @@
-import type { MetricResults } from "./metrics.js";
+import type { MeasurementMetricFile, MetricResults } from "./metrics.js";
 import type {
   AttemptKey,
   AttemptPaths,
@@ -26,6 +26,6 @@ export interface RunStore {
   updateRemoteAttempt?(update: RemoteAttemptUpdate): Promise<void>;
   snapshot(): Promise<ResultSnapshot>;
   /** Resume starts a separate report directory; updates replace the current reports. */
-  saveReportBundle(snapshotDigest: string, metrics: MetricResults, markdown: string, reports: TaskReportDocument[], mode?: "update" | "resume"): Promise<void>;
+  saveReportBundle(snapshotDigest: string, metrics: MetricResults, markdown: string, reports: TaskReportDocument[], mode?: "update" | "resume", measurementFiles?: MeasurementMetricFile[]): Promise<void>;
   close(): Promise<void>;
 }

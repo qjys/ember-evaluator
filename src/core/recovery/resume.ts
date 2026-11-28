@@ -18,7 +18,12 @@ export function assertResumePluginVersions(previous: Record<string, string>, cur
 }
 
 
+export function assertResumable(run: RunManifest): void {
+  if (run.resultLayout) throw new ResumeError("CONFIG_INVALID", "Inference measurements are single-run; start a new run to measure again.");
+}
+
 export function planResume(run: RunManifest, attempts: AttemptSummary[], configFingerprint: string): ResumePlan {
+  assertResumable(run);
   if (run.configFingerprint !== configFingerprint)
     throw new ResumeError("SOURCE_CHANGED", "Resume configuration differs from the original run");
   // Completed evaluations (including Agent deadlines) are skipped; invalid, cancelled and

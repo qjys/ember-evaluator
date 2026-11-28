@@ -206,6 +206,7 @@ export async function executeEngine({
   const manifest: RunManifest = previous ?? {
     schemaVersion: 1,
     evaluationKind: components.benchmark.evaluationKind ?? "quality",
+    ...(components.benchmark.resultLayout ? { resultLayout: components.benchmark.resultLayout(experiment) } : {}),
     ...(batchPreparation ? { executionVersion: 2 as const } : {}),
     runId: runId ?? randomUUID(),
     source: null,
@@ -232,7 +233,7 @@ export async function executeEngine({
     });
   }
   const warnControl = (error: unknown) => warnRetryControl({ components, config, signal, ...(onProgress ? { onProgress } : {}) }, error);
-  if (components.store.controlDirectory) {
+  if (!manifest.resultLayout && components.store.controlDirectory) {
     try { control = await retryControl.start(components.store.controlDirectory, warnControl); }
     catch (error) { warnControl(error); }
   }
@@ -354,7 +355,7 @@ export async function executeEngine({
       if (attempt.record && isStreamTaskRetryEligible(attempt.record))
         streamFailures.set(attempt.key.taskId, (streamFailures.get(attempt.key.taskId) ?? 0) + 1);
     }
-    const canRetryStream = (record: AttemptRecord) => !schedulerSignal.aborted &&
+    const canRetryStream = (record: AttemptRecord) => !manifest.resultLayout && !schedulerSignal.aborted &&
       (streamFailures.get(record.key.taskId) ?? 0) < MAX_STREAM_TASK_RETRIES && isStreamTaskRetryEligible(record);
     taskQueue = retry;
     const cancelQueue = () => retry.close();
@@ -469,7 +470,9 @@ export async function executeEngine({
           taskId: record.key.taskId,
           attemptId: record.key.attemptId,
           error: true,
-          message: requiresDispatchStop(record) || hasUnconfirmedCleanup(record)
+          message: manifest.resultLayout
+            ? `Measurement stopped (${attemptStatus(record)}). Check the service and start a new run to measure again.`
+            : requiresDispatchStop(record) || hasUnconfirmedCleanup(record)
             ? `Task requires dispatch to stop (${attemptStatus(record)}). Resolve authentication, storage or resource cleanup errors before continuing with --resume`
             : `Task failed (${attemptStatus(record)}); run.onError=abort stops the evaluation and remaining tasks will not run. Use --resume to continue`,
         });

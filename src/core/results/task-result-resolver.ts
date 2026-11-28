@@ -20,7 +20,7 @@ export function selectAttemptRecords(run: RunManifest, attempts: AttemptSummary[
     if (group.some(previous => previous.key.attemptId === item.key.attemptId))
       throw new ResumeError("STORE_RECORD_INVALID", "Duplicate attempt identity");
     if (item.record) {
-      assertAttemptRecord(item.record);
+      assertAttemptRecord(item.record, !!run.resultLayout);
       if (item.record.evaluationKind !== run.evaluationKind)
         throw new ResumeError("STORE_RECORD_INVALID", "Attempt evaluation kind differs from its run");
       if (

@@ -48,6 +48,7 @@ export type AttemptKey = {
 };
 
 export type AttemptPaths = {
+  measurementPoint?: true;
   root: string;
   agent: string;
   verifier: string;
@@ -142,7 +143,17 @@ export type RunIdentity = {
   runtime: { node: string; platform: string; arch: string };
 };
 
+export type MeasurementLayout = {
+  kind: "inference-engine";
+  version: 1;
+  /** Configured concurrency per public measurement ID. Selection may use a subset. */
+  points: Record<string, number>;
+  /** Category file stems requested by the benchmark, including failed captures. */
+  requestedMetrics: string[];
+};
+
 export type RunManifest = {
+  resultLayout?: MeasurementLayout;
   schemaVersion: 1;
   evaluationKind: EvaluationKind;
   /** Absent in historical results; incompatible execution versions cannot resume. */

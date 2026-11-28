@@ -1,23 +1,54 @@
 import { createReadStream } from "node:fs";
-import { cp, mkdir, open, readdir, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, open, readdir, rename, rm, rmdir, writeFile } from "node:fs/promises";
 import { createInterface } from "node:readline";
 import { join } from "node:path";
 import type { AttemptRecord, AttemptStepResult, SolveResult, Usage } from "../contracts/result.js";
 import { collectAttemptAccounting } from "../results/attempt-accounting.js";
 import { readTrajectoryPrefix } from "./trajectory-recovery.js";
+import { checkedPath } from "./artifacts.js";
 import { trajectoryType } from "../results/record-validation.js";
 
 const directories = ["agent", "verifier", "logs", "artifacts", "collect"];
 
+/** Drain writable mounts after a pass without replacing the mount-point directory. */
+export async function fileMeasurementEvidence(root: string, phase: string): Promise<void> {
+  const present = new Set(await readdir(root));
+  for (const name of directories) {
+    if (!present.has(name)) continue;
+    const source = await checkedPath(root, name);
+    const children = await readdir(source);
+    if (!children.length) continue;
+    await mkdir(join(root, phase), { recursive: true });
+    await checkedPath(root, phase);
+    const destination = join(root, phase, name);
+    await mkdir(destination, { recursive: true });
+    await checkedPath(root, phase + "/" + name);
+    for (const child of children) await rename(join(source, child), join(destination, child));
+  }
+}
+
+export async function pruneEmptyDirectories(root: string): Promise<void> {
+  for (const entry of await readdir(root, { withFileTypes: true })) {
+    if (!entry.isDirectory() || entry.isSymbolicLink()) continue;
+    const path = join(root, entry.name);
+    await pruneEmptyDirectories(path);
+    if (!(await readdir(path)).length) await rmdir(path);
+  }
+}
+
 export async function archiveStep(root: string, record: AttemptRecord, step: AttemptStepResult): Promise<void> {
   const target = join(root, step.evidencePath);
   await mkdir(target, { recursive: true });
-  const present = new Set(await readdir(root));
-  for (const name of directories) if (present.has(name)) await cp(join(root, name), join(target, name), { recursive: true, dereference: false });
+  const point = step.evidencePath === step.name;
+  if (point) await fileMeasurementEvidence(root, step.name);
+  else {
+    const present = new Set(await readdir(root));
+    for (const name of directories) if (present.has(name)) await cp(join(root, name), join(target, name), { recursive: true, dereference: false });
+  }
   const accounting: Pick<AttemptRecord, "key" | "solve" | "accounting"> = { key: record.key, solve: step.solve };
   await collectAttemptAccounting(target, accounting);
   if (accounting.accounting) step.accounting = accounting.accounting;
-  await writeFile(join(target, "result.json"), JSON.stringify(step, null, 2) + "\n");
+  if (!point) await writeFile(join(target, "result.json"), JSON.stringify(step, null, 2) + "\n");
 }
 
 export async function clearStepOutputs(root: string): Promise<void> {

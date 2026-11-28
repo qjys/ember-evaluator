@@ -61,7 +61,7 @@ export function assertVerifyResult(value: unknown): asserts value is VerifyResul
 }
 
 /** Persisted JSON and remote workers are validation boundaries, even when callers are typed. */
-export function assertAttemptRecord(value: unknown): asserts value is AttemptRecord {
+export function assertAttemptRecord(value: unknown, measurementPoint = false): asserts value is AttemptRecord {
   if (!object(value)) invalid("record");
   if (!["quality", "performance"].includes(String(value.evaluationKind)))
     invalid("evaluationKind");
@@ -84,7 +84,7 @@ export function assertAttemptRecord(value: unknown): asserts value is AttemptRec
     const names = new Set<string>();
     for (const step of value.steps) {
       if (!object(step) || !text(step.name) || !/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/u.test(step.name) || names.has(step.name) ||
-        step.evidencePath !== `steps/${step.name}` || !timestamp(step.startedAt) || !timestamp(step.finishedAt) ||
+        step.evidencePath !== (measurementPoint ? step.name : `steps/${step.name}`) || !timestamp(step.startedAt) || !timestamp(step.finishedAt) ||
         !Array.isArray(step.errors) || !step.errors.every(error => object(error) && text(error.phase) && phases.has(error.phase) &&
           text(error.code) && text(error.message) && validFailureMetadata(error))) invalid("step");
       names.add(step.name);
