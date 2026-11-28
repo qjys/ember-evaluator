@@ -72,7 +72,6 @@ export function parseAgentXConfig(value: unknown): AgentXConfig {
 
 export class AgentXBenchmark implements Benchmark {
   readonly evaluationKind = "performance";
-  readonly evaluationScenario = "inference-engine";
   readonly validateSourceOnCompletedResume = true;
   private readonly source: DatasetRecordSource;
   private readonly cache: DatasetCache;

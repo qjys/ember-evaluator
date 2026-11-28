@@ -5,6 +5,14 @@ import { apply as registryPlugin } from "../../src/application/plugins/registry.
 import { localizePortableSelection, projectPortableSelection, validatePortableSelection } from "../../src/infrastructure/ray/protocol.js";
 import { harborConfigTransport } from "../../src/plugins/benchmarks/agent-harness/protocols/harbor/config-transport.js";
 
+test("Ray transports only a resolved benchmark category", () => {
+  const selection = { name: "custom", config: {}, evaluationScenario: "task" };
+  expect(localizePortableSelection(projectPortableSelection(selection, "benchmark"), "benchmark", { outputRoot: "/node" }))
+    .toEqual(selection);
+  expect(() => validatePortableSelection({ ...selection, evaluationScenario: { default: "task" } }, "benchmark")).toThrow(/evaluationScenario/);
+  expect(() => validatePortableSelection(selection, "environment")).toThrow(/protocol fields/);
+});
+
 test("an external benchmark declares its own host fields without a Ray name list", async () => {
   const ctx = new Context();
   await ctx.plugin(registryPlugin);

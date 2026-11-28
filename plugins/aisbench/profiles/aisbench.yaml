@@ -1,38 +1,28 @@
 id: aisbench
 role: benchmark
+extends: aisbench-native
 defaultVersion: "1.0"
 defaultScenario: standard
 versions:
   "1.0": {}
 plugin:
   name: aisbench
-  config:
-    workload:
-      inputLength: 2048
-      outputLength: 512
-      dataCount: 160
-      concurrency: 16
-      requestRate: 0
-defaults:
-  benchmark:
-    solver:
-      name: aisbench-ssh
-  environment: local
-  scheduler:
-    name: local
-    concurrency: 1
-  metrics: [aisbench-performance, duration, usage]
-  reporter: aisbench-markdown
-  run:
-    timeoutSeconds: 10800
-    preparation:
-      mode: batch
-      concurrency: 1
 scenarios:
-  standard: {}
+  standard:
+    plugin:
+      name: aisbench
+      config:
+        workload:
+          inputLength: 2048
+          outputLength: 512
+          dataCount: 160
+          concurrency: 16
+          requestRate: 0
+    defaults:
+      benchmark:
+        evaluationScenario: inference-engine
+      metrics: [aisbench-performance, duration, usage]
+      reporter: aisbench-markdown
   native:
     plugin:
       name: aisbench-native
-    defaults:
-      metrics: [aisbench-native-performance, duration, usage]
-      reporter: aisbench-native-markdown

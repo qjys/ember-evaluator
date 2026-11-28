@@ -218,7 +218,11 @@ test("native-owned concurrency and dataset-only operations retain their distinct
     { ...generated, multimodalAction: "prepare", multimodalGeneration: { ...generated.multimodalGeneration, outputDirectory: "/data" } },
     { multimodalManifest: "/data/manifest.json", multimodalAction: "validate" },
   ]) {
-    expect(new NativeBenchmark(parseNativeConfig(config), factory(".")).evaluationScenario).toBe("task");
+    const operation = new NativeBenchmark(parseNativeConfig(config), factory("."));
+    const refs = [];
+    for await (const ref of operation.enumerate(await operation.resolveSource(null, signal), signal)) refs.push(ref);
+    expect(refs).toHaveLength(1);
+    expect(refs[0]).not.toHaveProperty("measurementConcurrency");
   }
 });
 

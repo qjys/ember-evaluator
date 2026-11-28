@@ -28,6 +28,8 @@ export type ModelConfig = {
   retry?: { maxAttempts: number };
 };
 
+export type EvaluationScenario = "task" | "inference-engine";
+
 export type Selection = {
   name: string;
   config: Record<string, unknown>;
@@ -42,7 +44,7 @@ export type EffectiveConfig = {
   hardware?: HardwareKind;
   /** Every declared model service. Callers bind the one they reference. */
   services: Record<string, ModelConfig>;
-  benchmark: Selection;
+  benchmark: Selection & { evaluationScenario?: EvaluationScenario };
   verifier?: VerifierSelection;
   environment: Selection;
   solver: SolverSelection;

@@ -4,6 +4,7 @@ import { DEFAULT_LOCAL_CONCURRENCY, DEFAULT_METRICS, KNOWN_APIS, KNOWN_PROVIDERS
 import { expectRecord, rejectUnknown, expectNonEmptyString, expectPositiveInteger, parseSelection } from "../core/validation/input.js";
 import { type EffectiveConfig, type ModelConfig, type Selection, type VerifierSelection } from "../core/contracts/config.js";
 import { parseHardware } from "./hardware.js";
+import { resolveEvaluationScenario } from "./evaluation-scenario.js";
 import { DEFAULT_TASK_TIMEOUT_SECONDS } from "../core/policies/timeouts.js";
 import { preparationTimeoutMs } from "../core/preparation/preparation-timeout.js";
 
@@ -165,6 +166,8 @@ function parseMetrics(value: unknown): Selection[] {
 }
 
 export function parseEffectiveConfig(source: Record<string, unknown>): EffectiveConfig {
+  const { evaluationScenario, ...selection } = expectRecord(source.benchmark, "benchmark");
+  const benchmark = parseSelection(selection, "benchmark");
   const services = Object.fromEntries(Object.entries(expectRecord(source.services, "services"))
     .map(([name, model]) => [name, parseModel(expectRecord(model, `services.${name}`))]));
   const solver = expectRecord(source.solver, "solver");
@@ -182,7 +185,8 @@ export function parseEffectiveConfig(source: Record<string, unknown>): Effective
   return {
     hardware: parseHardware(source.hardware),
     services,
-    benchmark: parseSelection(source.benchmark, "benchmark"),
+    benchmark: evaluationScenario === undefined ? benchmark
+      : { ...benchmark, evaluationScenario: resolveEvaluationScenario(evaluationScenario, benchmark.config) },
     ...(verifier === undefined ? {} : { verifier }),
     solver: parsedSolver,
     environment: parseSelection(source.environment, "environment"),

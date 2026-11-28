@@ -4,8 +4,9 @@ import type { MeasurementLayout } from "../contracts/result.js";
 import type { TaskRef } from "../contracts/task.js";
 
 export function scenarioLayout(benchmark: Benchmark, config: EffectiveConfig): MeasurementLayout | undefined {
-  if (benchmark.evaluationScenario === undefined) return benchmark.resultLayout?.(config);
-  if (benchmark.evaluationScenario === "task") return undefined;
+  const scenario = config.benchmark.evaluationScenario;
+  if (scenario === undefined) return benchmark.resultLayout?.(config);
+  if (scenario === "task") return undefined;
   return { kind: "inference-engine", version: 2, points: {},
     requestedMetrics: benchmark.requestedMeasurements?.(config) ?? ["service/requests"] };
 }

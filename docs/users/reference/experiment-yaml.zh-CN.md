@@ -47,6 +47,7 @@
 | `benchmark.name` | 非空字符串 | 使用对象写法时必填 | 选择已注册的 Benchmark 或 Benchmark Profile。`benchmark: gsm8k` 是 `benchmark: { name: gsm8k }` 的简写。 |
 | `benchmark.version` | 非空字符串 | 可选，采用 Profile 的 `defaultVersion`（如有） | 使用所选 Profile 声明的版本。给 `"1.0"` 这类版本号加引号。 |
 | `benchmark.scenario` | 非空字符串 | 可选，采用 Profile 的 `defaultScenario`（如有） | 使用所选 Profile 声明的场景。 |
+| `benchmark.evaluationScenario` | `task` 或 `inference-engine` | 可省略，由 Benchmark Profile 选择 | 控制结果目录。GSM8K 按题保存。AgentX 和 AISBench 压测按并发保存。AISBench 原生模式只制数或校验数据时按任务保存。 |
 | `benchmark.config` | 对象 | 可选，由 Profile 提供或为空对象 | 所选 Benchmark 的专属参数。 |
 | `benchmark.solver` | 字符串或对象 | 可选，取 Profile 或框架默认 `simpleagent` | 选择本 Benchmark 使用的 Solver。对象支持 `name`、`config` 和 `service`。 |
 | `benchmark.solver.name` | 非空字符串 | 可选，取所选 Profile 或 `simpleagent` | 已注册的 Solver 名或 Solver Profile 名。 |

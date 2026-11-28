@@ -21,8 +21,6 @@ export interface Benchmark {
   evaluateSteps?(task: PreparedTask, results: AttemptStepResult[]): { verdict: VerifyResult | null; continue: boolean };
   readonly verificationRuntime?: VerificationRuntime;
   readonly evaluationKind?: EvaluationKind;
-  /** Workload semantics; the framework owns the on-disk layout for this scenario. */
-  readonly evaluationScenario?: "inference-engine" | "task";
   requestedMeasurements?(config: EffectiveConfig): string[];
   /** @deprecated Compatibility for external plugins built against the original layout API. */
   resultLayout?(config: EffectiveConfig): import("./result.js").MeasurementLayout;

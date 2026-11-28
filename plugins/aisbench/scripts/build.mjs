@@ -10,7 +10,7 @@ const destination = resolve(root, "dist");
 assert.equal(dirname(destination), resolve(root));
 assert.equal(destination, resolve(root, "dist"));
 const manifest = JSON.parse(await readFile(new URL("../resources.json", import.meta.url), "utf8"));
-const assets = ["profiles/aisbench.yaml", ...manifest.runtime.map(name => `runtime/${name}`)];
+const assets = ["profiles/aisbench.yaml", "profiles/aisbench-native.yaml", ...manifest.runtime.map(name => `runtime/${name}`)];
 const hashes = {}, contents = {};
 for (const name of assets) {
   assert(!name.includes("..") && !name.includes("\\") && !name.startsWith("/"));

@@ -95,8 +95,16 @@ export function resolveInput(configPath: string, input: UserConfig, profiles: Re
     ? profileChain(profiles, "benchmark", benchmark.name) : [];
   const origins: ConfigOrigins = {};
   let source: Record<string, unknown> = {};
+  let evaluationScenario: unknown;
   const apply = (value: Record<string, unknown>, origin: string) => {
     const normalized = partial(value);
+    // A classification belongs to the profile, even when a layer switches implementations.
+    // Replace the whole rule and resolve it after benchmark.config is merged and expanded.
+    if (isRecord(normalized.benchmark) && normalized.benchmark.evaluationScenario !== undefined) {
+      evaluationScenario = normalized.benchmark.evaluationScenario;
+      origins["benchmark.evaluationScenario"] = origin;
+      delete normalized.benchmark.evaluationScenario;
+    }
     clearReplacedOrigins(source, normalized, "", origins);
     source = expectRecord(merge(source, normalized), "configuration");
     trace(normalized, "", origin, origins);
@@ -151,6 +159,7 @@ export function resolveInput(configPath: string, input: UserConfig, profiles: Re
   if (canonicalName !== benchmark.name && benchmarkNameOrigin) origins["benchmark.name"] = benchmarkNameOrigin;
   const resolvedBenchmark = expectRecord(source.benchmark, "benchmark");
   const { solver: rawSolver, verifier: rawVerifier, ...pluginBenchmark } = resolvedBenchmark;
+  if (evaluationScenario !== undefined) pluginBenchmark.evaluationScenario = evaluationScenario;
   const solver = normalizeSelection(rawSolver, "benchmark.solver", [], true);
   const services = servicesInput(user.services);
   const service = solver.service ?? defaultService(services);

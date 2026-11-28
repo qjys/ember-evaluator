@@ -24,6 +24,20 @@ async function file(value: unknown): Promise<string> {
 function user(benchmark: unknown, rest = {}) { return parseUserConfig({ services, benchmark, ...rest }); }
 function fingerprint(value: unknown): string { assertJsonValue(value); return fingerprintConfig(value); }
 
+test("benchmark profiles classify results and retain that choice across an implementation change", () => {
+  const other: ConfigProfile = { id: "custom", role: "benchmark", extends: "agentx", plugin: { name: "other", config: {} } };
+  const registered = [...profiles, other];
+  for (const selection of ["agentx", { name: "agentx", scenario: "replay" }, "custom"])
+    expect(resolveConfig("experiment.yaml", user(selection), registered).benchmark.evaluationScenario).toBe("inference-engine");
+  const override = { name: "custom", evaluationScenario: "task" };
+  expect(resolveConfig("experiment.yaml", user(override), registered).benchmark).toEqual({
+    name: "other", config: {}, evaluationScenario: "task",
+  });
+  expect(resolveInput("experiment.yaml", user(override), registered).origins["benchmark.evaluationScenario"]).toBe("user YAML");
+  for (const value of ["native", null, { default: "task" }])
+    expect(() => user({ name: "custom", evaluationScenario: value })).toThrow(/benchmark.evaluationScenario/);
+});
+
 test("Terminal-Bench 4 aliases pin all 66 tasks without changing the 2.0 default", () => {
   const short = resolveConfig("experiment.yaml", user({ name: "terminalbench", version: "4.0" }), profiles);
   const full = resolveConfig("experiment.yaml", user({ name: "terminalbench", version: "4.0.0" }), profiles);

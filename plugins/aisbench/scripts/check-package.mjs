@@ -76,7 +76,7 @@ try {
   assert.equal(installedMetadata.peerDependencies[host.name], host.version);
   assert(!installedMetadata.dependencies?.[host.name]?.startsWith("link:"));
   for (const asset of [
-    "dist/index.js", "dist/profiles/aisbench.yaml", "dist/runtime/remote.py", "dist/runtime/synthetic.py",
+    "dist/index.js", "dist/profiles/aisbench.yaml", "dist/profiles/aisbench-native.yaml", "dist/runtime/remote.py", "dist/runtime/synthetic.py",
     "dist/runtime/upstream/aisbench_test.py", "dist/runtime/upstream/generate_dataset.py",
     "dist/runtime/upstream/data_picker.py", "dist/runtime/upstream/default_api.py",
     "dist/runtime/upstream/cal_prefix_hit_rate.py", "dist/runtime/upstream/save_file.py",

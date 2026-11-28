@@ -16,6 +16,32 @@ async function file(value: unknown, filename = "experiment.yaml") {
 }
 const load = (path: string) => loadConfig(path, {}, { KEY: "secret" });
 
+test("GSM8K's explicit task classification preserves the resume identity of historical task configs", async () => {
+  const current = await load(await file({ services, benchmark: "gsm8k" }));
+  expect(current.experiment.benchmark.evaluationScenario).toBe("task");
+  const path = await file({ ...current.experiment, services: { default: { ...current.experiment.services.default, apiKey: "${KEY}" } },
+    benchmark: { name: "gsm8k", config: current.experiment.benchmark.config } });
+  const historical = await loadSavedConfig(path, { KEY: "secret" });
+  expect(historical.experiment.benchmark.evaluationScenario).toBeUndefined();
+  expect(fingerprintResumeConfig(current.persisted)).toBe(fingerprintResumeConfig(historical.persisted));
+});
+
+test("native AISBench classification survives export, older expanded YAML and saved execution configs", async () => {
+  const benchmark = { name: "aisbench", scenario: "native", config: { remoteConfigFile: "/bench/job.py" },
+    solver: { config: { remote: { ssh: { host: "fixture.invalid", user: "bench" }, workRoot: "/jobs",
+      aisbenchWorkPath: "/bench", aisbenchVersion: "fixture", pythonExecutable: "/python" } } } };
+  const loaded = await load(await file({ services, benchmark }));
+  const exported = exportConfig(loaded);
+  expect(exported).toHaveProperty("benchmark.name", "aisbench-native");
+  expect(exported).toHaveProperty("benchmark.evaluationScenario", "inference-engine");
+  const reloaded = await load(await file(exported));
+  const saved = await loadSavedConfig(await file(loaded.persisted), { KEY: "secret" });
+  const older = { ...benchmark, name: "aisbench-native" };
+  const { scenario: _scenario, ...direct } = older;
+  const legacy = await load(await file({ services, benchmark: direct }));
+  for (const config of [reloaded, saved, legacy]) expect(config.experiment.benchmark).toEqual(loaded.experiment.benchmark);
+});
+
 test.each(["minimal", "low", "medium", "high", "xhigh", "max"])("service reasoning effort %s survives export, save and resume identity", async reasoningEffort => {
   const loaded = await load(await file({ services: { default: { ...services.default, reasoningEffort } }, benchmark: "gsm8k" }));
   expect(loaded.experiment.services.default?.reasoningEffort).toBe(reasoningEffort);

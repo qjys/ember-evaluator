@@ -7,6 +7,29 @@ import { parseAisbenchSshConfig } from "../../config.js";
 import { AisbenchSshSolver } from "../../solver.js";
 import { AisbenchRemoteClient } from "../../ssh/client.js";
 
+test("native data actions resolve to a task through either YAML entry point, including environment references", async () => {
+  const root = await mkdtemp(join(tmpdir(), "aisbench-action-"));
+  const path = join(root, "experiment.yaml");
+  try {
+    for (const benchmark of [{ name: "aisbench", scenario: "native" }, { name: "aisbench-native" }]) {
+      for (const action of ["prepare", "validate", "run"]) {
+        const input = action === "prepare" ? { dataCount: 2, multimodalGeneration: { imageScenario: "single_1080p", textTokens: 32,
+          mmmuParquetDir: "/data/MMMU", outputDirectory: "/data/out" } } : { multimodalManifest: "/data/manifest.json" };
+        await writeFile(path, JSON.stringify({ services: { default: { model: "fixture", base_url: "http://fixture.invalid/v1" } },
+          benchmark: { ...benchmark, config: { ...input, multimodalAction: "${ACTION}" }, solver: { config: {
+            tokenizerPath: "/model", remote: { ssh: { host: "fixture.invalid", user: "bench" }, workRoot: "/jobs",
+              aisbenchWorkPath: "/bench", aisbenchVersion: "fixture", pythonExecutable: "/python" } } } } }));
+        const config = await loadConfig(path, {}, { ACTION: action }, { allowMissingAuth: true });
+        const expected = action === "run" ? "inference-engine" : "task";
+        expect(config.experiment.benchmark).toMatchObject({ name: "aisbench-native", evaluationScenario: expected });
+        expect(config.persisted).toHaveProperty("benchmark.evaluationScenario", expected);
+        expect(config.resolution?.origins["benchmark.evaluationScenario"]).toBe("profile aisbench-native");
+        expect(config.experiment.benchmark.config).not.toHaveProperty("evaluationScenario");
+      }
+    }
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 test.each(["standard", "native", "configured"])("%s SSH measurements commit a complete trajectory and session", async scenario => {
   const root = await mkdtemp(join(tmpdir(), "ais-evidence-"));
   const signal = new AbortController().signal;

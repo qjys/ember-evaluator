@@ -23,7 +23,7 @@ export { createPreparationRound, runPreparationRound } from "./core/preparation/
 export type * from "./core/contracts/verifier.js";
 export type * from "./core/contracts/config-transport.js";
 export type * from "./core/contracts/verification-runtime.js";
-export type { CliOverrides, ModelConfig, ReasoningEffort, Selection, SolverSelection, VerifierSelection, EffectiveConfig, RuntimeAuth } from "./core/contracts/config.js";
+export type { CliOverrides, EvaluationScenario, ModelConfig, ReasoningEffort, Selection, SolverSelection, VerifierSelection, EffectiveConfig, RuntimeAuth } from "./core/contracts/config.js";
 export type { DEFAULT_LOCAL_CONCURRENCY, DEFAULT_METRICS, KNOWN_APIS, KNOWN_PROVIDERS } from "./config/defaults.js";
 export type { assertJsonValue, expectNonEmptyString, expectPositiveInteger, expectPositiveNumber, expectRecord, parseSelection, rejectUnknown } from "./core/validation/input.js";
 export type { assertServiceBindings, solverBinding } from "./core/policies/service-bindings.js";

@@ -1,4 +1,4 @@
-import type { Selection } from "../contracts/config.js";
+import type { EvaluationScenario, Selection } from "../contracts/config.js";
 import type { JsonValue } from "../contracts/task.js";
 
 export function expectRecord(value: unknown, path: string): Record<string, unknown> {
@@ -35,6 +35,11 @@ export function expectPositiveNumber(value: unknown, path: string): number {
     throw new TypeError(`${path} must be a positive number`);
   }
   return value;
+}
+
+export function parseEvaluationScenario(value: unknown, path = "benchmark.evaluationScenario"): EvaluationScenario {
+  if (value === "task" || value === "inference-engine") return value;
+  throw new TypeError(`${path} must be task or inference-engine`);
 }
 
 export function parseSelection(value: unknown, path: string): Selection {

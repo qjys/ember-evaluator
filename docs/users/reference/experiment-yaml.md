@@ -47,6 +47,7 @@ See [Solver and model service configuration](../solvers.md#model-services-and-in
 | `benchmark.name` | non-empty string | Required in object form | Select a registered benchmark or Benchmark Profile. `benchmark: gsm8k` is shorthand for `benchmark: { name: gsm8k }`. |
 | `benchmark.version` | non-empty string | Optional, Profile `defaultVersion` if present | Use a version declared by the selected Profile. Quote numeric-looking versions such as `"1.0"`. |
 | `benchmark.scenario` | non-empty string | Optional, Profile `defaultScenario` if present | Use a scenario declared by the selected Profile. |
+| `benchmark.evaluationScenario` | `task` or `inference-engine` | Optional, selected by the benchmark profile | Selects the result layout. GSM8K stores results per question. AgentX and AISBench load tests store results per concurrency. Native AISBench dataset preparation and validation use the task layout. |
 | `benchmark.config` | object | Optional, Profile settings or empty object | Options for the selected Benchmark. |
 | `benchmark.solver` | string or object | Optional, Profile or framework `simpleagent` | Select the Solver for this Benchmark. Object form supports `name`, `config`, and `service`. |
 | `benchmark.solver.name` | non-empty string | Optional, selected Profile or `simpleagent` | Registered Solver name or a Solver Profile name. |

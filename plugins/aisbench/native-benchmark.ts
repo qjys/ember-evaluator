@@ -27,9 +27,8 @@ export class NativeBenchmark implements Benchmark {
   readonly validateSourceOnCompletedResume = true;
   constructor(readonly config: NativeConfig, private readonly runtime: PluginFactoryContext) {}
 
-  get evaluationScenario() {
-    return this.config.multimodalAction === "prepare" || this.config.multimodalAction === "validate"
-      ? "task" as const : "inference-engine" as const;
+  private get dataOnly(): boolean {
+    return this.config.multimodalAction === "prepare" || this.config.multimodalAction === "validate";
   }
 
   requestedMeasurements(): string[] {
@@ -51,7 +50,7 @@ export class NativeBenchmark implements Benchmark {
   }
 
   validateRun(config: EffectiveConfig): void {
-    validateAisbenchRun(config, this.config.multimodalAction !== "prepare" && this.config.multimodalAction !== "validate");
+    validateAisbenchRun(config, !this.dataOnly);
     const profileService = this.config.profiling?.service;
     if (profileService) {
       validateAisbenchService(config, profileService);
@@ -75,7 +74,7 @@ export class NativeBenchmark implements Benchmark {
   private *points(source: SourceLock) {
     const id = `aisbench-native-${fingerprintConfig(source).slice(-16)}`;
     const recordKey = fingerprintConfig(this.config);
-    if (source.revision === "1" || this.evaluationScenario === "task") {
+    if (source.revision === "1" || this.dataOnly) {
       yield { ref: { id, recordKey }, native: this.config };
       return;
     }
@@ -104,7 +103,7 @@ export class NativeBenchmark implements Benchmark {
     await this.resolveSource(source, signal);
     const point = Array.from(this.points(source)).find(p => ref.id === p.ref.id);
     if (!point || ref.recordKey !== point.ref.recordKey) throw new TypeError("Invalid native AISBench task selection");
-    const shareGenerated = this.config.multimodalGeneration && this.evaluationScenario === "inference-engine" &&
+    const shareGenerated = this.config.multimodalGeneration && !this.dataOnly &&
       source.revision !== "1" && new Set(this.config.concurrency).size > 1;
     const payload = { kind: "aisbench-native", schemaVersion: 1, native: point.native, files: source.files,
       ...(shareGenerated ? { sharedGenerationCount: Math.max(...this.config.dataCount!) } : {}),

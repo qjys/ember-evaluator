@@ -1,0 +1,23 @@
+id: aisbench-native
+role: benchmark
+plugin:
+  name: aisbench-native
+defaults:
+  benchmark:
+    evaluationScenario:
+      default: inference-engine
+      configKey: multimodalAction
+      cases: { prepare: task, validate: task }
+    solver:
+      name: aisbench-ssh
+  environment: local
+  scheduler:
+    name: local
+    concurrency: 1
+  metrics: [aisbench-native-performance, duration, usage]
+  reporter: aisbench-native-markdown
+  run:
+    timeoutSeconds: 10800
+    preparation:
+      mode: batch
+      concurrency: 1

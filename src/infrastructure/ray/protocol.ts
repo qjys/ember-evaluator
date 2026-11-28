@@ -13,6 +13,7 @@ import type { SolverProvenance } from "../../core/contracts/solver.js";
 import { validateSolverProvenance } from "../../core/results/solver-provenance.js";
 import { preparationTimeoutMs, preparationConcurrency } from "../../core/preparation/preparation-timeout.js";
 import { fingerprintImageConfig } from "../../core/policies/image-config.js";
+import { parseEvaluationScenario } from "../../core/validation/input.js";
 
 export type RemoteConfig = Pick<EffectiveConfig, "hardware" | "benchmark" | "environment" | "solver" | "verifier"> & PhaseTimeoutOverrides & {
   timeoutSeconds: number;
@@ -108,7 +109,12 @@ export function validatePortablePluginActivations(value: unknown) {
 
 export function validatePortableSelection(value: unknown, role: string, lookup?: ConfigTransportLookup): Selection {
   const fields = ["name", "config"];
-  if (role === "solver" || (role === "verifier" && Object.hasOwn(object(value), "service"))) fields.push("service");
+  const selection = object(value);
+  if (role === "solver" || (role === "verifier" && Object.hasOwn(selection, "service"))) fields.push("service");
+  if (role === "benchmark" && Object.hasOwn(selection, "evaluationScenario")) {
+    parseEvaluationScenario(selection.evaluationScenario);
+    fields.push("evaluationScenario");
+  }
   const record = object(value, fields);
   text(record.name);
   if (fields.includes("service")) text(record.service);

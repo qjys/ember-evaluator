@@ -12,7 +12,6 @@ const sourceName = "github:rayn-zzz/aisbench_auto_tools_prefix";
 
 export class AisbenchBenchmark implements Benchmark {
   readonly evaluationKind = "performance";
-  readonly evaluationScenario = "inference-engine";
   readonly validateSourceOnCompletedResume = true;
   constructor(readonly config: AisbenchConfig) {}
 

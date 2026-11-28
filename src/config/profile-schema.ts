@@ -1,9 +1,12 @@
 import { assertJsonValue, expectNonEmptyString, expectRecord, rejectUnknown } from "../core/validation/input.js";
 import { type Selection } from "../core/contracts/config.js";
 import type { BenchmarkSelection, UserConfig } from "./user-schema.js";
+import type { ScenarioDefault } from "./evaluation-scenario.js";
 
 export type ProfileRole = "benchmark" | "solver";
-export type ProfileDefaults = Omit<Partial<UserConfig>, "benchmark"> & { benchmark?: string | Partial<BenchmarkSelection> };
+export type ProfileDefaults = Omit<Partial<UserConfig>, "benchmark"> & {
+  benchmark?: string | (Omit<Partial<BenchmarkSelection>, "evaluationScenario"> & { evaluationScenario?: ScenarioDefault });
+};
 export type ProfileLayer = {
   plugin?: Selection;
   defaults?: ProfileDefaults;

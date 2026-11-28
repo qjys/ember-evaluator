@@ -28,6 +28,12 @@ export function fingerprintResumeConfig(persisted: JsonValue): string {
     const { output: _output, network: _network, hardware, ...rest } = persisted;
     // Preserve historical NPU fingerprints while rejecting a change to GPU.
     if (hardware !== undefined && hardware !== "npu") rest.hardware = hardware;
+    // Task profiles can now spell out the historical default without invalidating old runs.
+    const benchmark = rest.benchmark;
+    if (benchmark && typeof benchmark === "object" && !Array.isArray(benchmark) && benchmark.evaluationScenario === "task") {
+      const { evaluationScenario: _scenario, ...selection } = benchmark;
+      rest.benchmark = selection;
+    }
     return fingerprintConfig(rest as JsonValue);
   }
   return fingerprintConfig(persisted);

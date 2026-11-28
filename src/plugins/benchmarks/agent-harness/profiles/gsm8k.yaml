@@ -1,5 +1,8 @@
 id: gsm8k
 role: benchmark
+defaults:
+  benchmark:
+    evaluationScenario: task
 plugin:
   name: gsm8k
   config:
