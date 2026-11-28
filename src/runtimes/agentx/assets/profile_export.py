@@ -4,6 +4,7 @@ import json
 import math
 from collections import Counter
 
+from native_diagnostics import native_evidence, update_stat
 from timeline import rank_timeline
 
 
@@ -58,7 +59,11 @@ def summarize_export(directory, root):
     kernels = {}
     small = {}
     kernel_count = 0
+    pipeline = {}
     for row in rows(directory / "kernel_details.csv"):
+        for column, value in row.items():
+            if column == "cube_utilization(%)" or column.startswith(("aic_", "aiv_")) and column.endswith("_ratio"):
+                update_stat(pipeline, column, value)
         kernel_count += 1
         name = field(row, "Name", "Kernel Name") or "?"
         slot = kernels.setdefault(name, {"name": name})
@@ -149,4 +154,5 @@ def summarize_export(directory, root):
             "hostSync": host_group({"aten::_local_scalar_dense", "aten::nonzero", "aten::_unique"}),
             "topKernelWait": top(kernels.values(), "waitUs", 10), "traceCategories": dict(categories),
             "topShapes": top(shapes.values(), "durationUs"), "timeline": timeline,
+            "native": native_evidence(directory, rows, pipeline),
             "stepSpansUs": spans, "atb": list(atb.values())}

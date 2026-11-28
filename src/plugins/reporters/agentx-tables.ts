@@ -13,20 +13,34 @@ function renderDiagnostics(p: Record<string, unknown>): string[] {
   if (p.artifactDirectory) lines.push("诊断产物 · " + escape(String(p.artifactDirectory)), "");
   if (p.traceDirectory) lines.push("服务端 trace · " + escape(String(p.traceDirectory)), "");
   if (p.worstRankByExposedCommunication) lines.push("未被计算覆盖的通信时间最长的 Rank · " + escape(String(p.worstRankByExposedCommunication)), "");
+  if (p.categories) {
+    lines.push("指标类型覆盖 · " + escape(String(p.coverageStatus)), "");
+    const labels: Record<string, string> = { timeline: "计算时间线", operators: "算子与 Shape", runtime: "Runtime 下发", memcpy: "Memcpy",
+      allocator: "框架显存分配", pipeline: "Cube / Vector / MTE", communication: "HCCL 通信与重叠", links: "卡间链路",
+      cpu: "主机 CPU", memory: "主机内存", disk: "磁盘 I/O", network: "主机网络", npuMemory: "NPU 显存",
+      npuUtilization: "NPU 利用率", hbmBandwidth: "HBM 读写带宽", l2Cache: "L2 Cache" };
+    lines.push("| 优化指标类型 | 采集状态 | 来源 | 覆盖数 / 目标数 | 缺失原因 |", "| --- | --- | --- | --- | --- |");
+    for (const [key, raw] of Object.entries(expectRecord(p.categories, "profile categories"))) {
+      const c = expectRecord(raw, "category coverage");
+      lines.push("| " + [labels[key] ?? key, c.status, c.source, c.observed + " / " + c.expected, c.reason ?? "—"].map(v => escape(String(v))).join(" | ") + " |");
+    }
+    lines.push("");
+  }
+  if (Array.isArray(p.frontendTraces)) for (const path of p.frontendTraces) lines.push("API 进程 trace · " + escape(String(path)), "");
   for (const evidence of [p.localMetrics, p.nodeMetrics]) {
     if (!evidence) continue;
     const node = expectRecord(evidence, "AgentX node metrics");
     lines.push("服务节点采样 · " + escape(String(node.endpoint)) + " · " + escape(String(node.status)), "",
-      "| 序列 | 均值 | 峰值 | 计数器增量 | 样本 |", "| --- | ---: | ---: | ---: | ---: |");
+      "| 序列 | 均值 | 峰值 | 计数器增量 | 每秒增量 | 样本 |", "| --- | ---: | ---: | ---: | ---: | ---: |");
     for (const [series, sample] of Object.entries(expectRecord(node.series, "node metrics series"))) {
       const r = expectRecord(sample, "node metric");
-      lines.push("| " + [series, r.mean, r.counter ? null : r.peak, r.delta, r.count].map(v => escape(String(v ?? "—"))).join(" | ") + " |");
+      lines.push("| " + [series, r.mean, r.counter ? null : r.peak, r.delta, r.ratePerSecond, r.count].map(v => escape(String(v ?? "—"))).join(" | ") + " |");
     }
     lines.push("", "未采到的序列 · " + escape(String(node.missing || "—")) + "，抓取失败次数 " + String(node.errors), "");
   }
   if (Array.isArray(p.exports)) {
     lines.push(`诊断轮回放 ${p.traceCount} 棵会话树，完成 ${p.requests} 条请求。`, "");
-    if (p.preset === "timeline" || !p.preset) {
+    if (p.preset === "full" || p.preset === "timeline" || !p.preset) {
       lines.push("| Rank 导出 | 设备证据 | 算子 Device (µs) | 算子 Host (µs) | Kernel 数 | Kernel 执行 (µs) | Kernel 等待 (µs) |",
       "| --- | --- | ---: | ---: | ---: | ---: | ---: |");
       for (const raw of p.exports) {
@@ -36,8 +50,46 @@ function renderDiagnostics(p: Record<string, unknown>): string[] {
       }
       lines.push("");
     }
-    for (const raw of p.exports) {
+    for (const raw of [...p.exports, ...(Array.isArray(p.hardwareExports) ? p.hardwareExports : [])]) {
       const rank = expectRecord(raw, "Ascend export");
+      if (rank.artifacts) {
+        const a = expectRecord(rank.artifacts, "native artifacts");
+        lines.push("原生产物清单 · " + escape(String(a.manifest)) + " · " + a.files + " 个文件，跳过 " + a.omitted + " 个", "");
+      }
+      if (rank.native) {
+        const native = expectRecord(rank.native, "native profile");
+        const comm = expectRecord(native.communication, "HCCL");
+        lines.push("Rank · " + escape(String(rank.artifactDirectory)), "");
+        for (const errors of [native.databaseErrors, comm.errors]) if (Array.isArray(errors))
+          for (const error of errors) lines.push(escape(String(error)), "");
+        for (const [unit, stats] of [["Kernel PMU（原始列单位）", native.pipeline], ["显存分配（MB）", native.allocatorMB],
+          ["HCCL 逐调用耗时（ms）", comm.timeMs]] as const) {
+          const entries = Object.entries(expectRecord(stats, "native statistics"));
+          if (!entries.length) continue;
+          lines.push("| " + unit + " | 均值 | 最大值 | 样本数 |", "| --- | ---: | ---: | ---: |");
+          for (const [name, item] of entries) {
+            const s = expectRecord(item, "native statistic");
+            lines.push("| " + [name, s.mean, s.max, s.count].map(v => escape(String(v))).join(" | ") + " |");
+          }
+          lines.push("");
+        }
+        if (Array.isArray(native.hbmChannels) && native.hbmChannels.length) {
+          lines.push("| NPU | HBM 通道 | 方向 | 均值 (MB/s) | 峰值 (MB/s) | 样本数 |", "| --- | --- | --- | ---: | ---: | ---: |");
+          for (const item of native.hbmChannels) {
+            const h = expectRecord(item, "HBM sample");
+            lines.push("| " + [h.device, h.channel, h.direction, h.meanMBps, h.peakMBps, h.count].map(v => escape(String(v))).join(" | ") + " |");
+          }
+          lines.push("");
+        }
+        if (Array.isArray(comm.links) && comm.links.length) {
+          lines.push("| HCCL 操作 | Rank 链路 | 传输 | MB | ms | GB/s |", "| --- | --- | --- | ---: | ---: | ---: |");
+          for (const item of comm.links) {
+            const link = expectRecord(item, "HCCL link");
+            lines.push("| " + [link.op, link.pair, link.transport, link.sizeMB, link.timeMs, link.bandwidthGBps].map(v => escape(String(v ?? "—"))).join(" | ") + " |");
+          }
+          lines.push("");
+        }
+      }
       if (rank.counters) {
         lines.push(`物理 NPU ${rank.physicalDevice} · msprof ${escape(String(p.preset))}`, "",
           "| CANN 表 / 指标（原始单位） | 导出行均值 | 导出行最大值 | 行数 |", "| --- | ---: | ---: | ---: |");

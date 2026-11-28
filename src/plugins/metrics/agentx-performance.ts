@@ -44,12 +44,13 @@ export class AgentXPerformanceMetrics implements Metrics {
       const profiling = hasProfile ? { ...(diagnostic?.deviceProfile ?? { status: missingStatus, ...(error ? { error } : {}) }),
         artifactDirectory: diagnostic?.deviceProfile ? artifact(diagnosticId, `profiling/point-${batch}`) : null,
         traceCount: diagnostic?.workload.traceCount ?? null, requests: diagnostic?.replayCoverage?.successfulRequests ?? null } : undefined;
-      if (!selected.has(taskId)) return { taskId, measurement: null, status: diagnostic?.deviceProfile?.status ?? missingStatus,
+      const diagnosticStatus = diagnostic?.deviceProfile?.coverageStatus ?? diagnostic?.deviceProfile?.status;
+      if (!selected.has(taskId)) return { taskId, measurement: null, status: diagnosticStatus ?? missingStatus,
         collections: [{ concurrency: batch, dataset: diagnostic?.workload.dataset ?? null, ...(profiling ? { profiling } : {}) }] };
       const performanceStatus = summary ? successfulAgentXWindow(summary) ?
         "measured" : "partial" : point.status;
       const complete = performanceStatus === "measured" && (!summary?.engine || summary.engine.status === "measured") &&
-        (!profiling || diagnostic?.deviceProfile?.status === "measured");
+        (!profiling || diagnosticStatus === "measured");
       return { ...point, status: !summary ? point.status : complete ? "measured" : "partial", collections: [{
         dataset: summary?.workload.dataset ?? null, concurrency: batch, performanceStatus,
         performanceDirectory: summary ? artifact(taskId, `outputs/point-${batch}`) : null, ...(summary?.engine ? { engine: summary.engine } : {}),

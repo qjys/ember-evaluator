@@ -9,7 +9,7 @@ const exec = promisify(execFile);
 
 export async function captureAgentXProfile<T>(options: {
   endpoint: string; key: string; directory: string; destination: string; exportTimeoutSeconds: number;
-  provider?: "vllm" | "sglang"; preset?: "timeline" | "compute" | "cache" | "bandwidth"; devices?: number[];
+  provider?: "vllm" | "sglang"; preset?: "full" | "timeline" | "compute" | "cache" | "bandwidth"; devices?: number[];
   nodeMetrics?: { endpoint: string; names: string[] }; analysisPython?: string; samplerPython?: string;
   pythonExecutable?: string; signal: AbortSignal;
 }, measure: () => Promise<T>, warmup?: () => Promise<void>): Promise<{ measurement: T; profile: unknown }> {
@@ -19,12 +19,14 @@ export async function captureAgentXProfile<T>(options: {
     throw new TypeError("AgentX profiling requires a credential-free HTTP(S) service URL");
   const python = await resolveAgentXPython(options.pythonExecutable, signal);
   const fixed = options.provider === "vllm";
-  const hardware = options.preset && options.preset !== "timeline";
-  if (options.devices && !["localhost", "127.0.0.1", "[::1]"].includes(base.hostname))
+  const full = options.preset === "full";
+  const hardware = options.preset && !full && options.preset !== "timeline";
+  const local = ["localhost", "127.0.0.1", "[::1]"].includes(base.hostname);
+  if (options.devices && !local)
     throw new Error("Run msprof on the inference service host using a loopback service endpoint and explicit physical devices");
   await mkdir(options.destination, { recursive: true });
   const sampler = options.samplerPython ?? python.executable;
-  if (options.devices) {
+  if (options.devices && !full) {
     await exec(sampler, ["-B", join(agentXAssets, "service_sampler.py"), "--check",
       JSON.stringify({ devices: options.devices, preset: options.preset ?? "timeline" })], { signal, timeout: 30000, windowsHide: true });
   }
@@ -57,6 +59,13 @@ export async function captureAgentXProfile<T>(options: {
 
   signal.throwIfAborted();
   let stop = true;
+  let stopping: Promise<void> | undefined;
+  const stopService = () => stopping ??= (async () => {
+    try {
+      const result = await post("stop_profile", fixed ? undefined : {}, AbortSignal.timeout(60000));
+      if (!result.ok) throw new Error(`HTTP ${result.status}`);
+    } catch (cause) { throw new Error("AgentX stop_profile unconfirmed; check the service before collecting again", { cause }); }
+  })();
   let measurement: T;
   let resources: Record<string, unknown> = {};
   try {
@@ -66,22 +75,22 @@ export async function captureAgentXProfile<T>(options: {
       stop = start.status >= 500;
       throw new Error(`AgentX start_profile returned HTTP ${start.status}`);
     }
-    if (options.nodeMetrics || options.devices) {
-      const sampled = await captureServiceSamples(sampler, options, measure);
+    // A loopback model URL may also be an SSH tunnel. Only sample the coordinator when node access was configured.
+    const localHost = full && local && (!!options.devices || !!options.samplerPython);
+    if (options.nodeMetrics || options.devices || localHost) {
+      const sampled = await captureServiceSamples(sampler, { ...options, localHost }, measure, stopService);
       measurement = sampled.measurement;
-      const { localMetrics, nodeMetrics } = sampled.evidence;
-      resources = { ...(localMetrics ? { localMetrics } : {}), ...(nodeMetrics ? { nodeMetrics } : {}) };
+      resources = sampled.evidence;
     } else measurement = await measure();
   } finally {
     // Even a lost response to start may leave the service recording. Cleanup has its own deadline.
-    if (stop) {
-      try {
-        const result = await post("stop_profile", fixed ? undefined : {}, AbortSignal.timeout(60000));
-        if (!result.ok) throw new Error(`HTTP ${result.status}`);
-      } catch (cause) { throw new Error("AgentX stop_profile unconfirmed; check the service before collecting again", { cause }); }
-    }
+    if (stop) await stopService();
   }
   signal.throwIfAborted();
-  const { stdout } = await exec(python.executable, ["-B", collector, ...args], { signal, encoding: "utf8", env: { ...process.env, AGENTX_REDACT: options.key }, maxBuffer: 16 * 1024 * 1024, windowsHide: true });
-  return { measurement, profile: { ...JSON.parse(stdout), preset: "timeline", ...resources } };
+  if (full) await writeFile(join(options.destination, "sampling-summary.json"),
+    JSON.stringify({ ...resources, devices: options.devices ?? [] }) + "\n");
+  const { stdout } = await exec(python.executable, ["-B", collector, ...args], { signal, encoding: "utf8",
+    env: { ...process.env, AGENTX_REDACT: options.key, AGENTX_FULL_PROFILE: full ? "1" : "" },
+    maxBuffer: 16 * 1024 * 1024, windowsHide: true });
+  return { measurement, profile: { ...resources, ...JSON.parse(stdout), preset: full ? "full" : "timeline" } };
 }

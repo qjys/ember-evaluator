@@ -7,6 +7,8 @@ import subprocess
 import sys
 import time
 
+from profile_artifacts import archive_rank, archive_frontend
+from profile_categories import classify
 from profile_export import summarize_export
 
 
@@ -14,6 +16,10 @@ def rank_roots(root):
     # A previous, unanalysed rank may finish exporting during this window.
     return {p for p in root.rglob("*") if p.is_dir() and
             (p.name.endswith("_ascend_pt") or p.name == "ASCEND_PROFILER_OUTPUT")}
+
+
+def frontend_traces(root):
+    return {f for f in root.glob("*.pt.trace.json*") if f.name.endswith((".pt.trace.json", ".pt.trace.json.gz"))}
 
 
 def analyse_rank(python, rank, deadline):
@@ -53,7 +59,7 @@ def wait_for_exports(root, timeout, excluded=(), analysis_python=None):
         for directory in exports:
             if directory.resolve() != directory or any(f.is_symlink() for f in directory.iterdir()):
                 raise ValueError("Unexpected symlink in Ascend profiler export")
-        if exports and all((p / "op_statistic.csv").is_file() or
+        if exports and all(any(p.glob("ascend_pytorch_profiler*.db")) or (p / "op_statistic.csv").is_file() or
                            ((p / "operator_details.csv").is_file() and (p / "trace_view.json").is_file())
                            for p in exports):
             snapshot = [(f, f.stat().st_size, f.stat().st_mtime_ns)
@@ -69,25 +75,26 @@ def wait_for_exports(root, timeout, excluded=(), analysis_python=None):
         time.sleep(min(1, remaining))
 
 
-def collect(root, destination, timeout, excluded=(), analysis_python=None):
+def collect(root, destination, timeout, excluded=(), analysis_python=None, sampling=None):
     secret = os.environ.get("AGENTX_REDACT")
     redact = {secret, json.dumps(secret)[1:-1], json.dumps(secret, ensure_ascii=False)[1:-1]} if secret else set()
     exports = []
     for path in wait_for_exports(root, timeout, excluded, analysis_python):
         target = destination / path.relative_to(root)
         target.mkdir(parents=True, exist_ok=True)
-        for name in ("step_trace_time.csv", "op_statistic.csv", "operator_details.csv", "kernel_details.csv", "trace_view.json"):
-            if (path / name).is_file():
-                with (path / name).open(encoding="utf-8", newline="") as source, (target / name).open("w", encoding="utf-8", newline="") as out:
-                    for line in source:
-                        for value in redact:
-                            line = line.replace(value, "[REDACTED]")
-                        out.write(line)
+        artifacts = archive_rank(path, root, destination, redact)
         summary = summarize_export(target, destination)
-        exports.append({**summary, "artifactDirectory": (Path("trace") / path.relative_to(root)).as_posix()})
+        exports.append({**summary, "artifacts": artifacts, "artifactDirectory": (Path("trace") / path.relative_to(root)).as_posix()})
     ranked = [item for item in exports if item["timeline"]["exposedCommunicationUs"] is not None]
     worst = max(ranked, key=lambda item: item["timeline"]["exposedCommunicationUs"]) if ranked else None
-    return {"worstRankByExposedCommunication": worst["artifactDirectory"] if worst else None,
+    frontend = [archive_frontend(f, destination, redact) for f in sorted(frontend_traces(root) - set(excluded))]
+    coverage = {}
+    if sampling is not None:
+        categories = classify(exports, sampling)
+        coverage = {"categories": categories, "coverageStatus": "measured" if
+                    all(c["status"] == "measured" for c in categories.values()) else "partial"}
+    return {"frontendTraces": frontend, **coverage,
+            "worstRankByExposedCommunication": worst["artifactDirectory"] if worst else None,
             "status": "measured" if all(e["deviceEvidence"] for e in exports) else "host-only",
             "traceDirectory": str(root), "exports": exports}
 
@@ -97,8 +104,11 @@ if __name__ == "__main__":
         raise KeyboardInterrupt()
     signal.signal(signal.SIGTERM, cancel)
     if sys.argv[1] == "--snapshot":
-        print(json.dumps(sorted(str(p) for p in rank_roots(Path(sys.argv[2])))))
+        root = Path(sys.argv[2])
+        print(json.dumps(sorted(str(p) for p in rank_roots(root) | frontend_traces(root))))
     else:
         baseline = set(map(Path, json.loads(Path(sys.argv[4]).read_text(encoding="utf-8")))) if len(sys.argv) > 4 else set()
-        print(json.dumps(collect(Path(sys.argv[1]), Path(sys.argv[2]), int(sys.argv[3]), baseline,
-                                 sys.argv[5] if len(sys.argv) > 5 else None), allow_nan=False))
+        dest = Path(sys.argv[2])
+        sampling = json.loads((dest / "sampling-summary.json").read_text(encoding="utf-8")) if os.getenv("AGENTX_FULL_PROFILE") else None
+        print(json.dumps(collect(Path(sys.argv[1]), dest, int(sys.argv[3]), baseline,
+                                 sys.argv[5] if len(sys.argv) > 5 else None, sampling), allow_nan=False))

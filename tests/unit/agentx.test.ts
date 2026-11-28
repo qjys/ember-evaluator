@@ -254,6 +254,7 @@ test.each([
   if (mode === "profiling") {
     const first = tasks[0];
     if (!first) throw new Error("Expected diagnostic");
+    expect(config.profiling?.preset).toBe("full");
     await bench.validatePrerequisites(first, async () => data);
     data.records = [];
     data.run.taskIds = tasks.map(t => t.id);

@@ -260,17 +260,30 @@ Set `benchmark.config.measurementMode` in the [tuning playbook](../../../playboo
 arsi-evaluator run playbook/agentx/agentx-service-profiling.yaml
 ```
 
-The example replays the same eight trees at concurrency 1 and 8. Diagnostics default to one complete tree per lane. Set `profiling.traceCount: 8` to use eight in both diagnostics. A tree can send multiple requests. Standard workloads keep native warmup and timing for the formal pass. TPOT uses (request latency − TTFT) / (output tokens − 1) for successful formal requests with at least two output tokens.
+The example replays the same eight trees at concurrency 1 and 8 in both passes. Omitting `profiling.traceCount` selects one complete tree per lane for diagnostics. A tree can send multiple requests. Standard workloads keep native warmup and timing for the formal pass. TPOT uses (request latency − TTFT) / (output tokens − 1) for successful formal requests with at least two output tokens.
 
 The formal pass scrapes the service's `/metrics` every second. Raw JSONL preserves the native measurement window. The default vLLM samples cover KV cache occupancy and running and waiting requests. Override the names with `engineMetrics`. Each label set has gauge mean, peak and sample count, or a counter delta. Missing samples and counter resets yield partial evidence. Existing experiments without the selector retain their original pass selection and sampling.
 
 | `profiling.preset` | Setup and evidence |
 | --- | --- |
-| `timeline` (default) | Enable the vLLM Ascend torch profiler. Set `torch_profiler_dir` in the service's `--profiler-config` and YAML `traceDirectory` to the same shared path. The evaluator calls `/start_profile` and `/stop_profile` and reads newly created ranks. With `provider: sglang` the service receives a per-window output directory. |
+| `full` (default with an explicit measurementMode) | Collect all available categories during one diagnostic replay. On the inference node, configure the loopback service endpoint and physical `devices` to collect node resources and msprof HBM and L2 alongside the service profiler. |
+| `timeline` | Enable the vLLM Ascend torch profiler. Set `torch_profiler_dir` in the service's `--profiler-config` and YAML `traceDirectory` to the same shared path. The evaluator calls `/start_profile` and `/stop_profile` and reads newly created ranks. With `provider: sglang` the service receives a per-window output directory. |
 | `compute` | Run on the serving host with a loopback inference endpoint, CANN's `msprof` and `npu-smi` on PATH, and explicit physical `devices`. PipeUtilization reports available Cube, Vector and MTE counters. |
 | `bandwidth`, `cache` | The same setup captures on-chip memory bandwidth or L2Cache statistics. Available fields depend on the device and CANN. Each diagnostic selects one preset. If CANN only exports hits and reallocations on misses, the report preserves those counts and labels the derived fraction as hits / (hits + miss allocations). |
 
-PMU counters cover the full profiler window, including replay-client setup and drain. The report separates AI Core and Vector Core tables and keeps the HBM average and individual channels distinct. Counts in these tables refer to exported CANN rows.
+Full diagnostics use the same service profiler configuration as timeline. Enable `torch_profiler_record_shapes` and `torch_profiler_with_memory` on vLLM Ascend to capture shapes and framework allocation records. A sharded service exercising collectives can also export HCCL evidence. The report and metrics JSON record coverage, sources and missing evidence by category.
+
+| Optimization question | Evidence |
+| --- | --- |
+| Is the host keeping up? | CPU busy and I/O wait, total and available RAM, per-block-device I/O counts, bytes and busy time, and network interface counters. The sampler sees its own namespaces. Disks and partitions are listed individually. |
+| How much NPU memory does the workload use? | Physical chip utilization, HBM capacity and occupancy, plus framework allocated, reserved and active memory by rank and component. |
+| Where does execution time go? | Operators and shapes, Runtime, copies, device intervals and per-kernel Cube, Vector and MTE statistics in native column units. |
+| Is memory traffic limiting execution? | Read and write bandwidth per HBM channel from the rank database (bytes/s converted to decimal MB/s) or the msprof export, plus available L2 events. |
+| How much communication is exposed? | HCCL times, compute overlap and per-link transport, transferred size, duration and bandwidth by rank. |
+
+The attempt's `trace/` retains new API process traces and each rank's native exports, profiler databases, metadata and raw inputs for offline reanalysis. Each `evaluator-artifacts.json` lists paths and sizes relative to its rank. Inspect `ASCEND_PROFILER_OUTPUT/communication.json` for individual HCCL calls and `communication_matrix.json` for links. Storage grows with the number of ranks and profile duration. PMU windows include replay-client setup and drain.
+
+Set the template's `devices: [0, 1]` to the physical devices used by the local service. For a remote inference endpoint, omit local devices and configure the shared trace directory and serving node's `nodeMetrics` exporter. Disk and network counters include the delta and the rate over their observed sample interval.
 
 Timeline evidence includes per-rank operators and input shapes when exported, runtime APIs, copies, and HCCL durations. Compute/communication overlap is the intersection of merged device intervals in the same clock domain. Missing intervals remain unavailable. The report identifies the rank with the largest exposed communication duration when both types of events exist. Host-only exports are marked `host-only`. The coordinator requires Python 3.11–3.13. For raw ranks requiring offline analysis, `profiling.analysisPython` may select an interpreter with matching torch_npu.
 

@@ -14,12 +14,11 @@ benchmark:
     measurementMode: all   # performance | profiling | all
     profiling:
       provider: vllm
-      preset: timeline     # compute | cache | bandwidth require devices and local msprof
-      # devices: [1]       # Local serving host: collect CPU, network, memory and these physical NPUs
+      preset: full         # Default: one diagnostic replay per concurrency, all available categories
+      devices: [0, 1]      # Set to the physical NPUs of the local serving instance
       # Mount this directory at the same absolute path on the service and evaluator.
       traceDirectory: /data/shared/agentx-traces
-      # Default: replay one complete tree per concurrency lane in each diagnostic.
-      # traceCount: 8
+      traceCount: 8        # Compare identical session trees at both concurrency levels
       # service: diagnostic   # Optional entry in services serving the same model.
       exportTimeoutSeconds: 1800
   solver:

@@ -15,6 +15,7 @@ from urllib.request import build_opener
 
 from ascend_metrics import parse_readings
 from engine_metrics import NoRedirect, parse_samples
+from host_resources import DISK_COUNTERS, NETWORK_COUNTERS, host_reader
 
 
 def chip_mapping(physical):
@@ -31,6 +32,8 @@ def chip_mapping(physical):
 
 def metric_column(name, preset, table):
     key = name.lower()
+    if preset == "full":
+        return metric_column(name, "bandwidth", table) or metric_column(name, "cache", table)
     if preset == "compute":
         return any(s in key for s in ("cube", "mac", "vec", "mte")) and ("ratio" in key or "(%)" in key)
     if preset == "cache":
@@ -74,7 +77,7 @@ def counter_exports(root, preset, mapping):
         for slot in metrics.values():
             slot["mean"] = slot["sum"] / slot["count"]
         fractions = {}
-        if preset == "cache":
+        if preset in ("cache", "full"):
             for name, hits in metrics.items():
                 if not name.endswith("_cache_hit"):
                     continue
@@ -88,36 +91,33 @@ def counter_exports(root, preset, mapping):
 
 
 def local_reader(devices):
-    inventory = subprocess.run(["npu-smi", "info", "-m"], capture_output=True, check=True, text=True, timeout=5).stdout
     from local_telemetry import discover_chips
-    targets = [(device, chip) for device in devices for chip in discover_chips(inventory, device)]
-    expected = {"host_memory_available_bytes", "host_cpu_busy_percent", "host_receive_bytes_total", "host_transmit_bytes_total",
-                "ascend_npu_hbm_usage_percent", "ascend_npu_utilization_percent"}
-    last_cpu = None
+    targets = []
+    if devices:
+        try:
+            inventory = subprocess.run(["npu-smi", "info", "-m"], capture_output=True, check=True, text=True, timeout=5).stdout
+            targets = [(device, chip) for device in devices for chip in discover_chips(inventory, device)]
+        except (OSError, ValueError, subprocess.SubprocessError):
+            pass
+    expected = {"host_memory_available_bytes", "host_cpu_busy_percent", *NETWORK_COUNTERS, *DISK_COUNTERS}
+    read_host = host_reader()
+    device_fields = ("ascend_npu_hbm_usage_percent", "ascend_npu_utilization_percent", "ascend_npu_hbm_capacity_megabytes")
+    for device in devices:
+        expected.update(name + '{device="%d",chip="%d"}' % (device, chip)
+                        for name in device_fields for chip in ([c for d, c in targets if d == device] or [0]))
 
     def read():
-        nonlocal last_cpu
-        values = {}
-        cpu = [int(x) for x in Path("/proc/stat").read_text().splitlines()[0].split()[1:9]]
-        total, idle = sum(cpu), cpu[3] + cpu[4]
-        if last_cpu and total > last_cpu[0]:
-            busy = 1 - (idle - last_cpu[1]) / (total - last_cpu[0])
-            values["host_cpu_busy_percent"] = ("host_cpu_busy_percent", 100 * busy)
-        last_cpu = (total, idle)
-        mem = re.search(r"^MemAvailable:\s+(\d+) kB", Path("/proc/meminfo").read_text(), re.M)
-        if mem:
-            values["host_memory_available_bytes"] = ("host_memory_available_bytes", int(mem[1]) * 1024)
-        for line in Path("/proc/net/dev").read_text().splitlines()[2:]:
-            dev, fields = line.split(":", 1)
-            counts = fields.split()
-            for name, index in (("host_receive_bytes_total", 0), ("host_transmit_bytes_total", 8)):
-                values[name + "{interface=" + json.dumps(dev.strip()) + "}"] = (name, int(counts[index]))
+        values, counters = read_host()
         for device, chip in targets:
-            result = subprocess.run(["npu-smi", "info", "-t", "usages", "-i", str(device), "-c", str(chip)],
-                                    capture_output=True, check=True, text=True, timeout=3)
-            for name, value in parse_readings(result.stdout).items():
+            try:
+                result = subprocess.run(["npu-smi", "info", "-t", "usages", "-i", str(device), "-c", str(chip)],
+                                        capture_output=True, check=True, text=True, timeout=3)
+                readings = parse_readings(result.stdout)
+            except (OSError, ValueError, subprocess.SubprocessError):
+                continue
+            for name, value in readings.items():
                 values[name + '{device="%d",chip="%d"}' % (device, chip)] = (name, value)
-        return values, {"host_receive_bytes_total", "host_transmit_bytes_total"}
+        return values, counters
 
     return read, expected
 
@@ -129,13 +129,16 @@ def sample_series(read, names, endpoint, output_path, stopped, result):
     with output_path.open("w", encoding="utf-8") as output:
         while True:
             now = time.time_ns()
+            sampled_at = time.monotonic_ns()
             try:
                 values, counters = read()
                 for label, (name, value) in values.items():
                     row = series.setdefault(label, {"name": name, "count": 0, "sum": 0, "peak": value,
-                                                    "first": value, "counter": name in counters, "reset": False})
+                                                    "first": value, "counter": name in counters, "reset": False,
+                                                    "firstNs": sampled_at})
                     row["reset"] |= row["counter"] and value < row.get("last", value)
-                    row.update(count=row["count"] + 1, sum=row["sum"] + value, last=value, peak=max(row["peak"], value))
+                    row.update(count=row["count"] + 1, sum=row["sum"] + value, last=value,
+                               lastNs=sampled_at, peak=max(row["peak"], value))
                 sample = {key: value for key, (_, value) in values.items()}
             except (OSError, ValueError, subprocess.SubprocessError):
                 errors += 1
@@ -144,11 +147,13 @@ def sample_series(read, names, endpoint, output_path, stopped, result):
             output.flush()
             if stopped.wait(1):
                 break
-    missing = set(names) - {v["name"] for v in series.values()}
+    missing = set(names) - {v["name"] for v in series.values()} - series.keys()
     for row in series.values():
         total = row.pop("sum")
+        seconds = (row.pop("lastNs") - row.pop("firstNs")) / 1e9
         if row["counter"]:
             row["delta"] = None if row["reset"] or row["count"] < 2 else row["last"] - row["first"]
+            row["ratePerSecond"] = row["delta"] / seconds if row["delta"] is not None and seconds > 0 else None
         else:
             row["mean"] = total / row["count"]
     incomplete = errors or missing or any(r["counter"] and r["delta"] is None for r in series.values())
@@ -164,27 +169,32 @@ def run(config):
     workers = []
     result = {"preset": preset, "traceDirectory": str(root)}
     try:
-        if preset != "timeline":
-            mapping = chip_mapping(config["devices"])
-            raw = root / "msprof"
-            raw.mkdir()
-            flags = ["--sys-period=86400", "--sys-devices=" + ",".join(map(str, mapping)), "--output=" + str(raw)]
-            if preset == "bandwidth":
-                flags += ["--sys-hardware-mem=on"]
-            else:
-                group = "PipeUtilization" if preset == "compute" else "L2Cache"
-                flags += ["--ai-core=on", "--aic-mode=sample-based", "--aic-freq=10", "--aic-metrics=" + group]
-            with (root / "msprof.log").open("w") as log:
-                proc = subprocess.Popen(["msprof", *flags], stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
-            if stopped.wait(1) or proc.poll() is not None:
-                raise RuntimeError("msprof did not start; inspect trace/msprof.log")
+        if preset != "timeline" and config.get("devices"):
+            try:
+                mapping = chip_mapping(config["devices"])
+                raw = root / "msprof"
+                raw.mkdir()
+                flags = ["--sys-period=86400", "--sys-devices=" + ",".join(map(str, mapping)), "--output=" + str(raw)]
+                if preset in ("bandwidth", "full"):
+                    flags += ["--sys-hardware-mem=on"]
+                if preset != "bandwidth":
+                    group = "PipeUtilization" if preset == "compute" else "L2Cache"
+                    flags += ["--ai-core=on", "--aic-mode=sample-based", "--aic-freq=10", "--aic-metrics=" + group]
+                with (root / "msprof.log").open("w") as log:
+                    proc = subprocess.Popen(["msprof", *flags], stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+                if stopped.wait(1) or proc.poll() is not None:
+                    raise RuntimeError("msprof did not start; inspect trace/msprof.log")
+            except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
+                if preset != "full":
+                    raise
+                result["counterError"] = str(exc)
         def start_reader(key, read, names, endpoint, filename):
             result[key] = {}
             worker = Thread(target=sample_series, args=(read, names, endpoint, root / filename, stopped, result[key]))
             workers.append(worker)
             worker.start()
-        if config.get("devices"):
-            read, names = local_reader(config["devices"])
+        if config.get("devices") or config.get("localHost"):
+            read, names = local_reader(config.get("devices") or [])
             start_reader("localMetrics", read, names, os.uname().nodename, "local-metrics.jsonl")
         if config.get("nodeMetrics"):
             node = config["nodeMetrics"]
@@ -195,7 +205,9 @@ def run(config):
         print("ready", flush=True)
         stopped.wait()
         if proc is not None and proc.poll() is not None:
-            raise RuntimeError("msprof exited before the diagnostic finished; inspect trace/msprof.log")
+            if preset != "full":
+                raise RuntimeError("msprof exited before the diagnostic finished; inspect trace/msprof.log")
+            result["counterError"] = "msprof exited before replay finished; inspect trace/msprof.log"
     finally:
         stopped.set()
         for worker in workers:
@@ -207,16 +219,25 @@ def run(config):
             except subprocess.TimeoutExpired:
                 os.killpg(proc.pid, signal.SIGKILL)
                 proc.wait()
-                raise RuntimeError("msprof failed to stop and export within 60 seconds")
-    if proc:
-        # CANN releases may leave raw PROF data after an interrupted system collection.
-        for capture in raw.glob("PROF_*"):
-            if capture.is_dir() and not any(capture.rglob("*.csv")):
-                with (root / "msprof.log").open("a") as log:
-                    subprocess.run(["msprof", "--export=on", "--output=" + str(capture)], stdout=log,
-                                   stderr=subprocess.STDOUT, timeout=180, check=True)
-        result["exports"] = counter_exports(raw, preset, mapping)
-        result["status"] = "measured" if all(r["deviceEvidence"] for r in result["exports"]) else "partial"
+                if preset != "full":
+                    raise RuntimeError("msprof failed to stop and export within 60 seconds")
+                result["counterError"] = "msprof export timed out"
+    if proc and "counterError" not in result:
+        try:
+            for capture in raw.glob("PROF_*"):
+                if capture.is_dir() and not any(capture.rglob("*.csv")):
+                    with (root / "msprof.log").open("a") as log:
+                        subprocess.run(["msprof", "--export=on", "--output=" + str(capture)], stdout=log,
+                                       stderr=subprocess.STDOUT, timeout=180, check=True)
+            exports = counter_exports(raw, preset, mapping)
+            if preset == "full":
+                result["hardwareExports"] = exports
+            else:
+                result.update(exports=exports, status="measured" if all(r["deviceEvidence"] for r in exports) else "partial")
+        except (OSError, ValueError, subprocess.SubprocessError) as exc:
+            if preset != "full":
+                raise
+            result["counterError"] = str(exc)
     print(json.dumps(result, allow_nan=False), flush=True)
 
 

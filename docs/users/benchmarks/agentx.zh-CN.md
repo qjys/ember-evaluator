@@ -261,17 +261,30 @@ SSH 认证属于部署操作，不写入实验 YAML。模型必须支持所选 T
 arsi-evaluator run playbook/agentx/agentx-service-profiling.yaml
 ```
 
-示例按并发 1、8 各回放相同的前 8 棵会话树。诊断默认每档回放与并发数相同的树数；将 `profiling.traceCount` 设为 8 可使两个诊断档都使用前 8 棵。并发单位是会话树，一棵树可以发送多次请求。`scenario: standard` 保留 Harness 的预热和正式窗口，诊断始终使用有界回放。请求级 TPOT 为一次成功请求的（总时延 − 首 token 时延）除以（输出 token 数 − 1），仅纳入至少两个输出 token 的请求。
+示例在正式和诊断两轮都使用相同的前 8 棵会话树，分别按并发 1 和 8 回放。省略 `profiling.traceCount` 时，每个诊断档的树数等于会话并发数。一棵树可以发送多次请求。`scenario: standard` 保留 Harness 的预热和正式窗口，诊断始终使用有界回放。请求级 TPOT 为一次成功请求的（总时延 − 首 token 时延）除以（输出 token 数 − 1），仅纳入至少两个输出 token 的请求。
 
 正式轮从服务的 `/metrics` 每秒采样，并保留正式时间窗口内的原始 JSONL。默认读取 vLLM 的 KV Cache 使用率、运行和等待请求数。用 `engineMetrics` 可指定其他 Prometheus 名称。Gauge 显示每组标签的均值、峰值和样本数，Counter 显示增量；重置或缺失会标为 `partial`。未配置 `measurementMode` 的旧实验沿用原有轮次及采样方式。
 
 | `profiling.preset` | 服务准备及采集内容 |
 | --- | --- |
-| `timeline`（默认） | 为 vLLM Ascend 启用 torch profiler，并将服务启动参数 `--profiler-config` 中的 `torch_profiler_dir` 和 YAML 的 `traceDirectory` 指向同一共享目录。协调端通过 `/start_profile` 和 `/stop_profile` 控制服务，只读取本轮新增的 rank。SGLang 用户设 `provider: sglang`，服务会收到本档的独立输出目录。 |
+| `full`（显式 measurementMode 的默认值） | 在同一次诊断回放中开启服务 profiler，收集所有可用指标类型。在推理节点使用回环服务地址并指定物理卡号（例如 `devices: [0, 1]`），同时启动系统资源采样及 msprof 的 HBM、L2 计数器采集。 |
+| `timeline` | 为 vLLM Ascend 启用 torch profiler，并将服务启动参数 `--profiler-config` 中的 `torch_profiler_dir` 和 YAML 的 `traceDirectory` 指向同一共享目录。协调端通过 `/start_profile` 和 `/stop_profile` 控制服务，只读取本轮新增的 rank。SGLang 用户设 `provider: sglang`，服务会收到本档的独立输出目录。 |
 | `compute` | 在服务主机使用本机回环地址和已配置 CANN 的 `msprof`、`npu-smi`，指定 `devices: [1]` 等物理卡号。按 PipeUtilization 采集 Cube、Vector、MTE 等已导出字段。 |
 | `bandwidth` / `cache` | 使用相同的本机设置。分别采集片上内存读写带宽或 L2Cache 命中指标，实际字段取决于硬件和 CANN 导出。每次诊断只选一种。若 CANN 只导出命中及缺失后重分配次数，报告保留原始计数，并列出“命中 /（命中 + 缺失后重分配）”的口径。 |
 
-专项计数器覆盖 profiler 开启到停止的整个窗口，包含回放客户端的准备和收尾。报告分开列出 AI Core 与 Vector Core，并保留 HBM 板级均值及各通道行。导出行数反映 CANN 表中参与汇总的行数。
+综合诊断的服务配置与 timeline 相同。要查看 Shape 和框架显存分配，在 vLLM Ascend 启动参数 `--profiler-config` 中设置 `torch_profiler_record_shapes: true` 和 `torch_profiler_with_memory: true`。多卡服务运行实际跨卡负载后可查看 HCCL 数据。各类型在报告中标明来源、覆盖数和缺失原因，`metrics.json` 保留相同的分类键。
+
+| 优化问题 | 证据 |
+| --- | --- |
+| Host 有没有供给瓶颈 | 服务节点 CPU 忙碌率及 I/O 等待、总/可用内存、按块设备的读写次数、读写字节、I/O 时间，以及各网口收发字节。主机视图取决于采样进程所在命名空间，块设备与分区分别列出。 |
+| NPU 和显存如何使用 | 指定物理芯片的利用率、HBM 容量与占用率。框架 allocated / reserved / active 内存另按 rank、组件报告。 |
+| 时间花在哪、计算单元忙不忙 | 原生算子和 Shape、Runtime、Memcpy、设备时间线、逐 kernel 的 Cube / Vector / MTE 数值。PMU 列的统计按导出行计算，保留各列原始单位。 |
+| 显存或缓存是否受限 | 优先读取 rank 数据库 HBM 表的通道读写时序（Byte/s 转十进制 MB/s）；服务版本也可能将其写到 msprof CSV。L2 从实际导出读取，保留命中及缺失重分配的口径。 |
+| 多卡通信拖慢了多少 | 每个 rank 的 HCCL 调用耗时、等待、计算重叠，以及通信矩阵中各链路的传输类型、大小、耗时和带宽。不同 rank 的时间独立统计。 |
+
+每个诊断 attempt 的 `trace/` 保留新增的 API 进程 trace 和 rank 文件，包括原生分析目录、profiler 数据库、元信息和可重分析的原始数据。每个 rank 的 `evaluator-artifacts.json` 按相对路径列出文件和大小。分析多卡通信时，可从 `ASCEND_PROFILER_OUTPUT/communication.json` 查看逐次调用，从同目录下的 `communication_matrix.json` 查看链路。磁盘需求随 rank 数和采集窗口增长。专项计数器覆盖 profiler 开启到停止的窗口，包含回放客户端的准备和收尾。
+
+模板中的 `devices: [0, 1]` 指向同机推理服务使用的两张物理卡，请按部署调整。如果压测端通过网络访问推理服务，移除本机卡号，使用共享 trace 目录和服务节点的 `nodeMetrics`。磁盘、网络的计数器同时提供窗口增量和按实际采样时长计算的每秒速率。
 
 时间线报告列出每个 rank 的热点算子、输入 Shape、Runtime 调用和 Memcpy，以及 HCCL 的执行时间和与计算重叠的时间。重叠按同一设备时钟上的区间求交；缺少相应事件时显示为缺失。多 rank 时报告标出未被计算覆盖的通信时间最长的 rank。能导出 Shape 的服务端 profiler 和 CANN 版本才能提供 Shape。只有主机事件时状态为 `host-only`。协调端需要 Python 3.11–3.13，原始 rank 需要离线解析时可用 `profiling.analysisPython` 指向安装了匹配 torch_npu 的解释器。
 

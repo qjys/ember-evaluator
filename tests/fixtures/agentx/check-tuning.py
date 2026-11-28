@@ -7,6 +7,10 @@ from tempfile import TemporaryDirectory
 sys.path.insert(0, sys.argv[1])
 from service_sampler import counter_exports
 from request_statistics import per_request_tpot
+from native_diagnostics import hbm_channels, native_evidence
+from profile_export import rows
+from host_resources import host_reader
+import sqlite3
 
 
 with TemporaryDirectory() as tmp:
@@ -15,6 +19,21 @@ with TemporaryDirectory() as tmp:
         (root / (table + "_20261127185309.csv")).write_text(
             f"Device_id,Core ID,mac_ratio,write_cache_hit,write_cache_miss_allocate\n1,Core0,{ratio},30,10\n",
             encoding="utf-8")
+    db = sqlite3.connect(root / "ascend_pytorch_profiler_1.db")
+    db.executescript("""CREATE TABLE HBM(deviceId, hbmId, type, bandwidth);
+        CREATE TABLE STRING_IDS(id, value); INSERT INTO STRING_IDS VALUES (2, 'write');
+        INSERT INTO HBM VALUES (1, 0, 2, 21000000), (1, 0, 2, 9000000);""")
+    db.close()
+    (root / "l2_cache.csv").write_text("Read Hit Rate(%)\n")
+    assert native_evidence(root, rows, {})["l2Cache"] == {}
+    (root / "l2_cache.csv").write_text("Read Hit Rate(%)\n20\n")
+    assert native_evidence(root, rows, {})["l2Cache"]["read hit rate(%)"]["mean"] == 20
+    channels, errors = hbm_channels(root)
+    assert not errors and channels[0]["direction"] == "write" and channels[0]["meanMBps"] == 15
+    (root / "diskstats").write_text("8 0 sda 3 0 5 0 2 0 4 0 0 17 0\n")
+    values, counters = host_reader(root)()
+    assert values['host_disk_read_bytes_total{device="sda"}'][1] == 5 * 512
+    assert "host_disk_io_milliseconds_total" in counters
     data, = counter_exports(root, "compute", {1: 1})
     assert data["counters"]["ai_core_utilization/mac_ratio"]["mean"] == .2
     assert data["counters"]["ai_vector_core_utilization/mac_ratio"]["mean"] == .8

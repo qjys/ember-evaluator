@@ -4,7 +4,7 @@ import { assertJsonValue, expectNonEmptyString, expectPositiveInteger, expectRec
 
 export type AgentXProfileConfig = {
   provider?: "vllm" | "sglang";
-  preset?: "timeline" | "compute" | "bandwidth" | "cache";
+preset?: "full" | "timeline" | "compute" | "bandwidth" | "cache";
   devices?: number[];
   nodeMetrics?: { endpoint: string; names: string[] };
   analysisPython?: string;
@@ -31,13 +31,13 @@ export function parseProfileConfig(value: unknown, defaultProvider?: "vllm"): Ag
     throw new TypeError("profiling.traceDirectory must be an absolute shared path");
   const provider = v.provider ?? defaultProvider;
   if (provider !== undefined && provider !== "vllm" && provider !== "sglang") throw new TypeError("profiling.provider must be vllm or sglang");
-  const preset = v.preset;
-  if (preset !== undefined && preset !== "timeline" && preset !== "compute" && preset !== "cache" && preset !== "bandwidth")
-    throw new TypeError("profiling.preset must be timeline, compute, bandwidth or cache");
+  const preset = v.preset ?? (defaultProvider ? "full" : undefined);
+  if (preset !== undefined && preset !== "full" && preset !== "timeline" && preset !== "compute" && preset !== "cache" && preset !== "bandwidth")
+    throw new TypeError("profiling.preset must be full, timeline, compute, bandwidth or cache");
   const devices = v.devices;
   if (devices !== undefined && (!Array.isArray(devices) || !devices.length || devices.some(d => !Number.isSafeInteger(d) || d < 0) ||
     new Set(devices).size !== devices.length)) throw new TypeError("profiling.devices requires distinct physical NPU IDs");
-  if (preset && preset !== "timeline" && !devices) throw new TypeError("msprof presets require profiling.devices on the service host");
+  if (preset && ["compute", "bandwidth", "cache"].includes(preset) && !devices) throw new TypeError("msprof presets require profiling.devices on the service host");
   let nodeMetrics: AgentXProfileConfig["nodeMetrics"];
   if (v.nodeMetrics !== undefined) {
     const node = expectRecord(v.nodeMetrics, "profiling.nodeMetrics");
@@ -78,6 +78,13 @@ export function collectionEvidence(value: unknown, kind: "engine" | "profiling")
   } else {
     if (!["measured", "host-only", "partial"].includes(String(raw.status)) || !Array.isArray(raw.exports) || raw.exports.length === 0 ||
         typeof raw.traceDirectory !== "string") throw new TypeError("Invalid AgentX profile");
+    if (raw.coverageStatus !== undefined) {
+      const categories = Object.values(expectRecord(raw.categories, "profiling categories"));
+      const states = categories.map(item => expectRecord(item, "profiling category").status);
+      if (!states.length || states.some(state => !["measured", "partial", "unavailable"].includes(String(state))) ||
+          raw.coverageStatus !== (states.every(state => state === "measured") ? "measured" : "partial"))
+        throw new TypeError("Invalid AgentX profiling category coverage");
+    }
     const flags = raw.exports.map(item => expectRecord(item, "Ascend export").deviceEvidence);
     if (raw.status === "partial" && !["compute", "cache", "bandwidth"].includes(String(raw.preset))) throw new TypeError("Invalid partial hardware profile");
     if (flags.some(flag => typeof flag !== "boolean") || (raw.status === "measured") !== flags.every(flag => flag === true))

@@ -5,15 +5,16 @@ import { createInterface } from "node:readline";
 import { agentXAssets } from "./runtime.js";
 
 type Sampling = {
-  destination: string; preset?: string; devices?: number[]; signal: AbortSignal;
+  destination: string; preset?: string; devices?: number[]; localHost?: boolean; signal: AbortSignal;
   nodeMetrics?: { endpoint: string; names: string[] };
 };
 
-export async function captureServiceSamples<T>(python: string, options: Sampling, measure: () => Promise<T>) {
+export async function captureServiceSamples<T>(python: string, options: Sampling, measure: () => Promise<T>,
+  stopService?: () => Promise<void>) {
   const { destination, preset, devices, nodeMetrics, signal } = options;
   signal.throwIfAborted();
   const child = spawn(python, ["-B", join(agentXAssets, "service_sampler.py"),
-    JSON.stringify({ destination, preset, devices, nodeMetrics })], { windowsHide: true, stdio: "pipe" });
+    JSON.stringify({ destination, preset, devices, nodeMetrics, localHost: options.localHost })], { windowsHide: true, stdio: "pipe" });
   const closed = once(child, "close");
   // Drain stderr while waiting for the readiness handshake and final summary.
   let diagnostic = "";
@@ -26,8 +27,14 @@ export async function captureServiceSamples<T>(python: string, options: Sampling
     const ready = await Promise.race([lines.next(), closed.then(() => ({ value: undefined }))]);
     signal.throwIfAborted();
     if (ready.value !== "ready") throw new Error("AgentX diagnostic collector failed to start: " + diagnostic);
-    const measurement = await measure();
-    stop();
+    let measurement: T;
+    try {
+      measurement = await measure();
+    } finally {
+      stop();
+      // Stop both recorders at the replay boundary. CANN may spend minutes exporting afterwards.
+      await stopService?.();
+    }
     const summary = await lines.next();
     const [code] = await closed;
     signal.throwIfAborted();
